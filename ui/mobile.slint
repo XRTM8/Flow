@@ -1,0 +1,525 @@
+import { Theme } from "theme.slint";
+import { HistoryItem } from "models.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export component MobileApp inherits Window {
+    title: "Otium Flow";
+    background: Theme.background;
+    default-font-family: "Roboto, sans-serif";
+
+    // المتغيرات الخاصة بالهاتف مع مراعاة "مكان البردة" وشريط الإيماءات السفلي
+    in-out property <length> safe_area_top: 48px;    // حماية منطقة البردة / النوتش وشريط الحالة
+    in-out property <length> safe_area_bottom: 34px; // حماية شريط الإيماءات وزر الرجوع السفلي
+
+    in-out property <string> peer_name: "Scanning Wi-Fi...";
+    in-out property <bool> is_connected: false;
+    in-out property <string> last_received_text: "No text received yet";
+    in-out property <bool> text_cleaned: false;
+    in-out property <bool> transfer_active: false;
+    in-out property <string> transfer_name: "";
+    in-out property <float> transfer_progress: 0.0;
+    in-out property <string> transfer_status: "";
+    in-out property <bool> show_history: false;
+    in-out property <[HistoryItem]> history_items: [];
+
+    callback share_file_clicked();
+    callback push_clipboard_clicked();
+    callback copy_received_clicked();
+    callback toggle_history();
+    callback clear_history();
+    callback cancel_transfer_clicked();
+
+    VerticalLayout {
+        // نطبق مسافة الأمان العلوية (البردة) والسفلية تلقائياً
+        padding-top: root.safe_area_top + 12px;
+        padding-bottom: root.safe_area_bottom + 12px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 16px;
+
+        // 1. رأس الهاتف المريح (Below the Notch)
+        HorizontalLayout {
+            alignment: space-between;
+
+            VerticalLayout {
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "FLOW";
+                        font-size: 20px;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                        letter-spacing: 1.5px;
+                    }
+                    Text {
+                        text: "by Otium";
+                        font-size: 12px;
+                        color: Theme.text-muted;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // أزرار الحالة والسجل في رأس النافذة
+            HorizontalLayout {
+                spacing: 8px;
+
+                // مؤشر الاتصال بالحاسوب
+                Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 14px;
+                    height: 28px;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 6px;
+                        alignment: center;
+
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: root.is_connected ? Theme.status-online : Theme.status-waiting;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: root.peer_name;
+                            font-size: 12px;
+                            color: root.is_connected ? Theme.text-secondary : Theme.text-muted;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // زر فتح سجل النشاط في الهاتف
+                Rectangle {
+                    width: 32px;
+                    height: 28px;
+                    border-radius: 14px;
+                    background: hist-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                    border-width: 1px;
+                    border-color: root.show_history ? Theme.accent : Theme.border;
+
+                    hist-touch := TouchArea {
+                        clicked => { root.toggle_history(); }
+                    }
+
+                    Text {
+                        text: "📜";
+                        font-size: 13px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+        }
+
+        // 2. بطاقة النقل النشط (إذا كان هناك ملف يتم استقباله أو إرساله)
+        if root.transfer_active : Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            height: 70px;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: root.transfer_name;
+                        font-size: 13px;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                        width: 180px;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.transfer_status;
+                            font-size: 12px;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            width: 34px;
+                            height: 28px;
+                            border-radius: 14px;
+                            background: cancel-mobile-touch.has-hover ? #ef444433 : #00000000;
+                            cancel-mobile-touch := TouchArea {
+                                clicked => { root.cancel_transfer_clicked(); }
+                            }
+                            Text {
+                                text: "✕";
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: Theme.status-error;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 5px;
+                    border-radius: 2.5px;
+                    background: #080a0f;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        height: parent.height;
+                        width: parent.width * root.transfer_progress;
+                        border-radius: 2.5px;
+                        background: Theme.accent;
+                    }
+                }
+            }
+        }
+
+        // 3. مساحة استعراض الحافظة والنصوص المستلمة
+        VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 8px;
+
+            Text {
+                text: "RECEIVED ON THIS DEVICE";
+                font-size: 11px;
+                font-weight: 600;
+                color: Theme.text-muted;
+                letter-spacing: 1px;
+            }
+
+            Rectangle {
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: Theme.radius-md;
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: "Clipboard Sync";
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                        }
+
+                        if root.text_cleaned : Rectangle {
+                            background: #10b98115;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #10b98133;
+                            height: 20px;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                Text {
+                                    text: "Link Cleaned";
+                                    font-size: 10px;
+                                    color: Theme.accent;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // صندوق النص
+                    Rectangle {
+                        background: #080a0f;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        vertical-stretch: 1;
+
+                        Text {
+                            text: root.last_received_text;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                            x: 12px;
+                            y: 12px;
+                            width: parent.width - 24px;
+                            height: parent.height - 24px;
+                        }
+                    }
+
+                    // زر النسخ السريع للهاتف
+                    Rectangle {
+                        background: copy-btn.has-hover ? Theme.surface-hover : #1a202c;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        border-radius: Theme.radius-sm;
+                        height: 38px;
+
+                        copy-btn := TouchArea {
+                            clicked => { root.copy_received_clicked(); }
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Text {
+                                text: "📋 Copy to Phone Clipboard";
+                                font-size: 13px;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. منطقة أزرار الإبهام السفلية (One-Handed Thumb Zone)
+        VerticalLayout {
+            spacing: 10px;
+
+            // زر إرسال ملف / صورة (الزر الأساسي البارز)
+            Rectangle {
+                background: file-btn.has-hover ? Theme.accent-hover : Theme.accent;
+                border-radius: Theme.radius-md;
+                height: 52px;
+
+                file-btn := TouchArea {
+                    clicked => { root.share_file_clicked(); }
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    Text {
+                        text: "↑";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "Send File or Photo";
+                        font-size: 15px;
+                        font-weight: 600;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // زر إرسال حافظة الهاتف إلى الحاسوب
+            Rectangle {
+                background: clip-btn.has-hover ? Theme.surface-hover : Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: Theme.radius-md;
+                height: 44px;
+
+                clip-btn := TouchArea {
+                    clicked => { root.push_clipboard_clicked(); }
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    Text {
+                        text: "⚡ Push Phone Clipboard to PC";
+                        font-size: 13px;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. واجهة سجل التحويلات المنبثقة للهاتف (مع مراعاة مساحة البردة وشريط الإيماءات)
+    if root.show_history : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #0c0e14fa;
+        x: 0;
+        y: 0;
+
+        VerticalLayout {
+            padding-top: root.safe_area_top + 12px;
+            padding-bottom: root.safe_area_bottom + 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 16px;
+
+            // رأس سجل الهاتف
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "ACTIVITY HISTORY";
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    letter-spacing: 1px;
+                    vertical-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    // زر تفريغ السجل
+                    Rectangle {
+                        background: clear-mobile-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        border-radius: 8px;
+                        height: 30px;
+                        clear-mobile-touch := TouchArea {
+                            clicked => { root.clear_history(); }
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            Text {
+                                text: "Clear";
+                                font-size: 12px;
+                                color: Theme.text-muted;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // زر إغلاق السجل
+                    Rectangle {
+                        width: 30px;
+                        height: 30px;
+                        border-radius: 15px;
+                        background: close-mobile-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        close-mobile-touch := TouchArea {
+                            clicked => { root.toggle_history(); }
+                        }
+                        Text {
+                            text: "✕";
+                            font-size: 14px;
+                            color: Theme.text-secondary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+            }
+
+            // قائمة السجل للهاتف
+            ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    spacing: 10px;
+
+                    if root.history_items.length == 0 : Rectangle {
+                        height: 260px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            Text {
+                                text: "No transfer history yet";
+                                font-size: 14px;
+                                color: Theme.text-muted;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "Files and copied text will be recorded here";
+                                font-size: 12px;
+                                color: #475569;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    for item in root.history_items : Rectangle {
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        border-radius: Theme.radius-md;
+                        height: 60px;
+
+                        HorizontalLayout {
+                            padding: 12px;
+                            spacing: 12px;
+                            alignment: center;
+
+                            // أيقونة النوع
+                            Rectangle {
+                                width: 36px;
+                                height: 36px;
+                                border-radius: 8px;
+                                background: #080a0f;
+                                border-width: 1px;
+                                border-color: Theme.border;
+
+                                Text {
+                                    text: item.kind == "file" ? "📄" : "📋";
+                                    font-size: 16px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+
+                            // النصوص
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                horizontal-stretch: 1;
+
+                                Text {
+                                    text: item.title;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    color: Theme.text-primary;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: item.subtitle;
+                                    font-size: 11px;
+                                    color: Theme.text-muted;
+                                    overflow: elide;
+                                }
+                            }
+
+                            // الوقت
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                min-width: 55px;
+
+                                Text {
+                                    text: item.timestamp;
+                                    font-size: 10px;
+                                    color: Theme.text-muted;
+                                    horizontal-alignment: end;
+                                }
+                                Text {
+                                    text: item.success ? "✓" : "!";
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    color: item.success ? Theme.accent : Theme.status-error;
+                                    horizontal-alignment: end;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

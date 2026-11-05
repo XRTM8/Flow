@@ -1,12 +1,25 @@
-node_modules
-dist
-dist-ssr
-*.local
-src-tauri/target
-src-tauri/gen/android/app/build
-src-tauri/gen/android/.gradle
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+
+# Unrelated scratch plans
+_kinetic_void_plan.md
+
+# Operating System files
 .DS_Store
-*.jks
-keystore.properties
-*.log
-*.tsbuildinfo
+Thumbs.db
+Desktop.ini
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Android build artifacts
+local.properties
+.gradle/
+build/
+*.apk
+*.aab
