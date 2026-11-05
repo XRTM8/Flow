@@ -1,28 +1,41 @@
 export global Theme {
-    // فلسفة الأوبسيديان الفاخرة (Obsidian Slate Minimalist)
-    in property <color> background: #0b0d13;
-    in property <color> surface: #121620;
-    in property <color> surface-hover: #191f2d;
-    in property <color> surface-pressed: #1d2536;
-    in property <color> recessed: #07090e;
-    in property <color> border: #1d2333;
-    in property <color> border-subtle: #161b27;
-    in property <color> border-focus: #3b82f6;
+    // فلسفة الأوبسيديان والنيون الكوبالتي (Obsidian & Electric Azure Design System)
+    // عمق فضائي ملكي، شفافيات زجاجية دقيقة، ولمسات إلكترونية ساطعة
+    in property <color> background: #07090e;
+    in property <color> surface: #0e131f;
+    in property <color> surface-elevated: #141c2e;
+    in property <color> surface-hover: #19243b;
+    in property <color> surface-pressed: #090e17;
+    in property <color> recessed: #04060a;
 
+    // الحدود الزجاجية الدقيقة بتباين فائق
+    in property <color> border: #1e293f;
+    in property <color> border-subtle: #141c2c;
+    in property <color> border-focus: #00d2ff;
+    in property <color> border-accent-glow: #00d2ff44;
+
+    // ألوان النصوص ذات التباين المقروء
     in property <color> text-primary: #f8fafc;
     in property <color> text-secondary: #94a3b8;
     in property <color> text-muted: #64748b;
     in property <color> text-faint: #475569;
 
-    in property <color> accent: #10b981; // زمردي طبيعي هادئ
-    in property <color> accent-glow: #10b98118;
-    in property <color> accent-hover: #059669;
+    // اللمسات الكهربائية (Electric Azure / Cobalt Glow)
+    in property <color> accent: #00d2ff; // سيان كهربائي نيون
+    in property <color> accent-glow: #00d2ff24;
+    in property <color> accent-hover: #38bdf8;
+    in property <color> accent-pressed: #0284c7;
+    in property <color> accent-secondary: #6366f1; // أرجواني كوزميك
 
-    in property <color> status-online: #10b981;
+    // حالات الاتصال والأمان المشفر
+    in property <color> status-online: #00d2ff;
     in property <color> status-waiting: #f59e0b;
-    in property <color> status-error: #ef4444;
+    in property <color> status-error: #f43f5e;
+    in property <color> status-shield: #10b981;
 
-    in property <length> radius-sm: 8px;
-    in property <length> radius-md: 14px;
-    in property <length> radius-lg: 20px;
+    // مقاييس الزوايا والانحناءات الفاخرة
+    in property <length> radius-xs: 6px;
+    in property <length> radius-sm: 10px;
+    in property <length> radius-md: 16px;
+    in property <length> radius-lg: 22px;
 }

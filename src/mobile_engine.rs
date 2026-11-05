@@ -576,7 +576,7 @@ pub fn start_mobile_engine() -> Result<(), Box<dyn std::error::Error>> {
                     &paths,
                     Some(dev_id),
                     None,
-                    move |idx, total_count, sent, total, speed, eta| {
+                    move |idx, total_count, sent, total, speed, _eta| {
                         let prog = sent as f32 / total.max(1) as f32;
                         let status = format!("[{}/{}] Sent • {:.1} MB/s", idx, total_count, speed);
                         let _ = ui_prog.upgrade_in_event_loop(move |ui| {
@@ -752,6 +752,85 @@ pub fn start_mobile_engine() -> Result<(), Box<dyn std::error::Error>> {
                 let empty_model = history_entries_to_slint_model(&[]);
                 u.set_history_items(empty_model);
             });
+        });
+    });
+
+    // 4. محرر الملاحظات والنصوص المباشر للهاتف: كتابة وإرسال أي رسالة أو ملاحظة فوراً للحاسوب
+    let p_custom = active_peer.clone();
+    let hist_custom = history.clone();
+    let trust_custom = trust_manager.clone();
+    let dev_id_custom = persistent_device_id.clone();
+    let ui_send_custom = app_weak.clone();
+    app.on_send_custom_text(move |text_slint| {
+        let text = text_slint.to_string();
+        if text.trim().is_empty() {
+            return;
+        }
+        let p_arc = p_custom.clone();
+        let hist = hist_custom.clone();
+        let trust = trust_custom.clone();
+        let dev_id = dev_id_custom.clone();
+        let ui_btn = ui_send_custom.clone();
+
+        tokio::spawn(async move {
+            let peer = { p_arc.read().await.clone() };
+            if let Some(peer) = peer {
+                let (cleaned, _) = clean_text(&text);
+                let target = SocketAddr::new(peer.ip, peer.tcp_port);
+                let pairwise_key = trust.get_key_for_peer(&peer.id).await;
+                let res = TransferManager::send_encrypted_clipboard_with_auth(
+                    target,
+                    cleaned.clone(),
+                    Some(dev_id),
+                    Some(pairwise_key),
+                ).await;
+
+                if res.is_ok() {
+                    let _ = trust.trust_peer(peer.id.clone(), peer.name.clone()).await;
+                    hist.add_entry(
+                        HistoryKind::Clipboard,
+                        format_clipboard_preview(&cleaned),
+                        "Beamed Note (E2EE)".to_string(),
+                        true,
+                    ).await;
+
+                    let all_hist = hist.get_all().await;
+                    let _ = ui_btn.upgrade_in_event_loop(move |ui| {
+                        let hist_model = history_entries_to_slint_model(&all_hist);
+                        ui.set_text_sent(true);
+                        ui.set_history_items(hist_model);
+                    });
+
+                    let ui_revert = ui_btn.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                        let _ = ui_revert.upgrade_in_event_loop(|ui| {
+                            ui.set_text_sent(false);
+                        });
+                    });
+                }
+            }
+        });
+    });
+
+    let ui_paste_draft = app_weak.clone();
+    app.on_paste_to_draft(move || {
+        let ui_c = ui_paste_draft.clone();
+        tokio::spawn(async move {
+            if let Some(text) = clipboard::ClipboardManager::read_current() {
+                if !text.is_empty() {
+                    let _ = ui_c.upgrade_in_event_loop(move |ui| {
+                        ui.set_draft_text(text.into());
+                    });
+                }
+            }
+        });
+    });
+
+    let ui_clear_draft = app_weak.clone();
+    app.on_clear_draft(move || {
+        let _ = ui_clear_draft.upgrade_in_event_loop(|ui| {
+            ui.set_draft_text("".into());
         });
     });
 

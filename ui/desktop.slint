@@ -3,11 +3,11 @@ import { HistoryItem } from "models.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export component DesktopApp inherits Window {
-    title: "Otium Flow";
-    min-width: 780px;
-    min-height: 520px;
-    preferred-width: 840px;
-    preferred-height: 560px;
+    title: "Otium Flow — Ultra P2P Mesh";
+    min-width: 820px;
+    min-height: 560px;
+    preferred-width: 920px;
+    preferred-height: 620px;
     background: Theme.background;
     default-font-family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
@@ -28,6 +28,11 @@ export component DesktopApp inherits Window {
     in-out property <string> update_version: "";
     in-out property <bool> update_in_progress: false;
 
+    // Direct Note & Text Stream Composer properties
+    in-out property <string> draft_text: "";
+    in-out property <bool> text_sent: false;
+    in-out property <string> active_tab: "stream"; // "stream" or "history"
+
     callback copy_clipboard_clicked();
     callback send_clipboard_clicked();
     callback send_file_clicked();
@@ -37,63 +42,153 @@ export component DesktopApp inherits Window {
     callback cancel_transfer_clicked();
     callback apply_update_clicked();
 
+    // New Direct Composer callbacks
+    callback send_custom_text(string);
+    callback paste_to_draft();
+    callback clear_draft();
+
     VerticalLayout {
         padding: 20px;
         spacing: 16px;
 
-        // 1. الشريط العلوي العام (Top Navigation Bar)
+        // 1. الشريط العلوي العام الفاخر (Navigation & Mesh Telemetry Bar)
         HorizontalLayout {
             alignment: space-between;
-            height: 36px;
+            height: 38px;
 
-            // شعار FLOW الأنيق
+            // الشعار الفاخر FLOW by Otium مع وميض أزرق سيان نيون
             HorizontalLayout {
-                spacing: 8px;
+                spacing: 10px;
                 alignment: center;
-                Text {
-                    text: "FLOW";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: Theme.text-primary;
-                    letter-spacing: 2px;
-                    vertical-alignment: center;
-                }
+
                 Rectangle {
-                    width: 1px;
-                    height: 14px;
-                    background: Theme.border;
-                    y: (parent.height - self.height) / 2;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 9px;
+                    background: #0e1726;
+                    border-width: 1px;
+                    border-color: Theme.accent-glow;
+
+                    Text {
+                        text: "⚡";
+                        font-size: 15px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
                 }
-                Text {
-                    text: "by Otium";
-                    font-size: 11px;
-                    font-weight: 500;
-                    color: Theme.text-muted;
-                    vertical-alignment: center;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "FLOW";
+                            font-size: 17px;
+                            font-weight: 800;
+                            color: Theme.text-primary;
+                            letter-spacing: 2px;
+                        }
+                        Text {
+                            text: "MESH";
+                            font-size: 9px;
+                            font-weight: 700;
+                            color: Theme.accent;
+                            letter-spacing: 1.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: "by Otium • Ultra Encrypted P2P";
+                        font-size: 10px;
+                        color: Theme.text-muted;
+                        font-weight: 500;
+                    }
                 }
             }
 
-            // أدوات الحالة وتحديث البرنامج
+            // أدوات التبويب والحالة
             HorizontalLayout {
-                spacing: 8px;
+                spacing: 10px;
                 alignment: center;
 
+                // أزرار التبديل بين الاستوديو وسجل النشاط
+                Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-sm;
+                    height: 32px;
+
+                    HorizontalLayout {
+                        padding: 3px;
+                        spacing: 4px;
+
+                        // زر استوديو النقل المباشر
+                        Rectangle {
+                            background: root.active_tab == "stream" ? #18253e : #00000000;
+                            border-radius: 6px;
+                            border-width: root.active_tab == "stream" ? 1px : 0px;
+                            border-color: root.active_tab == "stream" ? Theme.border-focus : #00000000;
+                            animate background { duration: 120ms; }
+                            tab-stream-touch := TouchArea {
+                                clicked => { root.active_tab = "stream"; }
+                            }
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text {
+                                    text: "⚡ Quick Studio";
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    color: root.active_tab == "stream" ? Theme.text-primary : Theme.text-muted;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // زر سجل النشاطات
+                        Rectangle {
+                            background: root.active_tab == "history" ? #18253e : #00000000;
+                            border-radius: 6px;
+                            border-width: root.active_tab == "history" ? 1px : 0px;
+                            border-color: root.active_tab == "history" ? Theme.border-focus : #00000000;
+                            animate background { duration: 120ms; }
+                            tab-hist-touch := TouchArea {
+                                clicked => { root.active_tab = "history"; }
+                            }
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text {
+                                    text: root.history_items.length > 0 ? "🕒 Activity (" + root.history_items.length + ")" : "🕒 Activity";
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    color: root.active_tab == "history" ? Theme.text-primary : Theme.text-muted;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // كبسولة تحديث البرنامج التلقائي
                 if root.update_available : Rectangle {
                     background: update-touch.pressed ? #3b82f644 : update-touch.has-hover ? #3b82f628 : #3b82f618;
                     border-width: 1px;
                     border-color: #3b82f655;
-                    border-radius: 14px;
-                    height: 28px;
+                    border-radius: Theme.radius-sm;
+                    height: 32px;
                     animate background { duration: 120ms; }
                     update-touch := TouchArea {
                         clicked => { root.apply_update_clicked(); }
                     }
                     HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         alignment: center;
                         Text {
-                            text: root.update_in_progress ? "Updating..." : "Update " + root.update_version;
+                            text: root.update_in_progress ? "Updating in place..." : "Update Available: " + root.update_version;
                             font-size: 11px;
                             font-weight: 600;
                             color: #60a5fa;
@@ -102,17 +197,17 @@ export component DesktopApp inherits Window {
                     }
                 }
 
-                // كبسولة حالة الاتصال الأنيقة
+                // كبسولة حالة الاتصال والتشفير المعتمد
                 Rectangle {
                     background: Theme.surface;
                     border-width: 1px;
-                    border-color: Theme.border;
-                    border-radius: 14px;
-                    height: 28px;
+                    border-color: root.is_connected ? Theme.accent-glow : Theme.border;
+                    border-radius: Theme.radius-sm;
+                    height: 32px;
 
                     HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
+                        padding-left: 14px;
+                        padding-right: 14px;
                         spacing: 8px;
                         alignment: center;
 
@@ -122,31 +217,31 @@ export component DesktopApp inherits Window {
                             border-radius: 4px;
                             background: root.is_connected ? Theme.status-online : Theme.status-waiting;
                             border-width: 1px;
-                            border-color: root.is_connected ? #10b98144 : #f59e0b44;
+                            border-color: root.is_connected ? #00d2ff88 : #f59e0b88;
                             y: (parent.height - self.height) / 2;
                         }
 
                         Text {
                             text: root.peer_name;
                             font-size: 12px;
-                            font-weight: 500;
-                            color: root.is_connected ? Theme.text-secondary : Theme.text-muted;
+                            font-weight: 600;
+                            color: root.is_connected ? Theme.text-primary : Theme.text-secondary;
                             vertical-alignment: center;
                         }
 
                         if root.is_connected && root.sas_code != "" : Rectangle {
-                            background: Theme.recessed;
+                            background: #00d2ff18;
                             border-radius: 4px;
                             border-width: 1px;
-                            border-color: Theme.border-subtle;
-                            height: 18px;
+                            border-color: #00d2ff44;
+                            height: 20px;
                             HorizontalLayout {
                                 padding-left: 6px;
                                 padding-right: 6px;
                                 Text {
                                     text: "#" + root.sas_code + " Verified";
                                     font-size: 10px;
-                                    font-weight: 600;
+                                    font-weight: 700;
                                     color: Theme.accent;
                                     vertical-alignment: center;
                                 }
@@ -157,79 +252,183 @@ export component DesktopApp inherits Window {
             }
         }
 
-        // 2. الهيكل الرئيسي للشاشة المكتبية (Desktop 2-Column Responsive Layout)
-        HorizontalLayout {
+        // 2. بطاقة النقل النشط عالية الدقة (Telemetry Transfer HUD)
+        if root.transfer_active : Rectangle {
+            background: #0c121e;
+            border-width: 1px;
+            border-color: Theme.accent;
+            border-radius: Theme.radius-sm;
+            height: 64px;
+
+            VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: #00d2ff22;
+                            border-width: 1px;
+                            border-color: #00d2ff55;
+                            Text {
+                                text: "⚡";
+                                font-size: 13px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            Text {
+                                text: root.transfer_name;
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: Theme.text-primary;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: root.transfer_status;
+                                font-size: 11px;
+                                color: Theme.accent;
+                                font-weight: 500;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: Math.round(root.transfer_progress * 100) + "%";
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 28px;
+                            height: 24px;
+                            border-radius: 5px;
+                            background: cancel-touch.pressed ? #f43f5e33 : cancel-touch.has-hover ? #f43f5e22 : #1c263c;
+                            border-width: 1px;
+                            border-color: cancel-touch.has-hover ? #f43f5e66 : Theme.border;
+                            animate background { duration: 120ms; }
+                            cancel-touch := TouchArea {
+                                clicked => { root.cancel_transfer_clicked(); }
+                            }
+                            Text {
+                                text: "x";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: Theme.status-error;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                    }
+                }
+
+                // شريط التقدم النيون الناعم
+                Rectangle {
+                    height: 5px;
+                    border-radius: 2.5px;
+                    background: #070a10;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        height: parent.height;
+                        width: parent.width * root.transfer_progress;
+                        border-radius: 2.5px;
+                        background: Theme.accent;
+                        animate width { duration: 100ms; easing: ease-out; }
+                    }
+                }
+            }
+        }
+
+        // 3. المحتوى الرئيسي (حسب التبويب المختار)
+        if root.active_tab == "stream" : HorizontalLayout {
             spacing: 16px;
             vertical-stretch: 1;
 
-            // ===== العمود الأيسر: إدارة الاتصال وإرسال الملفات =====
+            // ===== العمود الأيسر: إدارة الاتصال ومنطقة السحب والإفلات =====
             VerticalLayout {
-                width: 380px;
+                width: 360px;
                 spacing: 12px;
 
-                // بطاقة الجهاز المتصل
+                // بطاقة الجهاز المتصل الفاخرة
                 Rectangle {
                     background: Theme.surface;
                     border-width: 1px;
-                    border-color: root.is_connected ? Theme.accent : Theme.border;
+                    border-color: root.is_connected ? #00d2ff44 : Theme.border;
                     border-radius: Theme.radius-md;
-                    height: 84px;
+                    height: 86px;
                     animate border-color { duration: 150ms; }
 
                     HorizontalLayout {
-                        padding: 14px;
+                        padding: 16px;
                         spacing: 14px;
                         alignment: center;
 
-                        // أيقونة الجهاز الذكي
                         Rectangle {
-                            width: 44px;
-                            height: 44px;
-                            border-radius: 10px;
-                            background: root.is_connected ? Theme.accent-glow : Theme.recessed;
+                            width: 48px;
+                            height: 48px;
+                            border-radius: 12px;
+                            background: root.is_connected ? #00d2ff18 : Theme.recessed;
                             border-width: 1px;
                             border-color: root.is_connected ? Theme.accent : Theme.border-subtle;
                             y: (parent.height - self.height) / 2;
 
                             VerticalLayout {
                                 alignment: center;
-                                spacing: 2px;
                                 Rectangle {
-                                    width: 18px;
-                                    height: 26px;
+                                    width: 20px;
+                                    height: 28px;
                                     border-radius: 4px;
-                                    border-width: 1.5px;
+                                    border-width: 1.8px;
                                     border-color: root.is_connected ? Theme.accent : Theme.text-muted;
                                     x: (parent.width - self.width) / 2;
-                                    // شاشة الهاتف الصغيرة
+
                                     Rectangle {
                                         width: 12px;
-                                        height: 16px;
+                                        height: 18px;
                                         y: 3px;
                                         x: (parent.width - self.width) / 2;
-                                        background: root.is_connected ? #10b98133 : #ffffff10;
-                                        border-radius: 1px;
+                                        background: root.is_connected ? #00d2ff33 : #ffffff10;
+                                        border-radius: 2px;
                                     }
                                 }
                             }
                         }
 
-                        // تفاصيل الجهاز والاتصال
                         VerticalLayout {
                             alignment: center;
                             spacing: 4px;
-                            HorizontalLayout {
-                                spacing: 6px;
-                                Text {
-                                    text: root.peer_name;
-                                    font-size: 14px;
-                                    font-weight: 600;
-                                    color: Theme.text-primary;
-                                    overflow: elide;
-                                }
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: root.peer_name;
+                                font-size: 14px;
+                                font-weight: 700;
+                                color: Theme.text-primary;
+                                overflow: elide;
                             }
                             Text {
-                                text: root.is_connected ? "Connected via Zero-Config Local Wi-Fi" : "Waiting for phone on the same Wi-Fi network...";
+                                text: root.is_connected ? "Direct Zero-Hop P2P • High Bandwidth" : "Listening for peer on the same Wi-Fi...";
                                 font-size: 11px;
                                 color: root.is_connected ? Theme.accent : Theme.text-muted;
                             }
@@ -237,9 +436,9 @@ export component DesktopApp inherits Window {
                     }
                 }
 
-                // مساحة السحب والإفلات وإرسال الملفات (Dropzone)
+                // مساحة السحب والإفلات الجاذبية (Gravitational Dropzone)
                 drop-area := Rectangle {
-                    background: drop-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                    background: drop-touch.has-hover ? #141c2c : Theme.surface;
                     border-width: 1.5px;
                     border-color: drop-touch.has-hover ? Theme.accent : Theme.border;
                     border-radius: Theme.radius-md;
@@ -256,12 +455,12 @@ export component DesktopApp inherits Window {
                         spacing: 14px;
                         padding: 20px;
 
-                        // أيقونة الرفع الدائرية
+                        // الأيقونة المدارية التفاعلية
                         Rectangle {
-                            width: 52px;
-                            height: 52px;
-                            border-radius: 26px;
-                            background: drop-touch.has-hover ? Theme.accent-glow : Theme.recessed;
+                            width: 60px;
+                            height: 60px;
+                            border-radius: 30px;
+                            background: drop-touch.has-hover ? #00d2ff28 : #0c121c;
                             border-width: 1px;
                             border-color: drop-touch.has-hover ? Theme.accent : Theme.border;
                             animate background { duration: 150ms; }
@@ -270,17 +469,18 @@ export component DesktopApp inherits Window {
 
                             VerticalLayout {
                                 alignment: center;
-                                spacing: 2px;
+                                spacing: 3px;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
+
                                 Rectangle {
                                     width: 2px;
-                                    height: 14px;
+                                    height: 16px;
                                     background: drop-touch.has-hover ? Theme.accent : Theme.text-secondary;
                                     x: (parent.width - self.width) / 2;
                                 }
                                 Rectangle {
-                                    width: 10px;
+                                    width: 12px;
                                     height: 2px;
                                     background: drop-touch.has-hover ? Theme.accent : Theme.text-secondary;
                                     x: (parent.width - self.width) / 2;
@@ -293,7 +493,7 @@ export component DesktopApp inherits Window {
                             Text {
                                 text: "Drop files or folders here";
                                 font-size: 14px;
-                                font-weight: 600;
+                                font-weight: 700;
                                 color: Theme.text-primary;
                                 horizontal-alignment: center;
                             }
@@ -307,19 +507,22 @@ export component DesktopApp inherits Window {
 
                         // زر استعراض الملفات الأساسي
                         Rectangle {
-                            width: 150px;
-                            height: 34px;
-                            border-radius: 6px;
-                            background: drop-touch.has-hover ? Theme.accent-hover : Theme.accent;
+                            width: 160px;
+                            height: 36px;
+                            border-radius: Theme.radius-sm;
+                            background: drop-touch.has-hover ? #0284c7 : #0369a1;
+                            border-width: 1px;
+                            border-color: Theme.accent;
                             x: (parent.width - self.width) / 2;
                             animate background { duration: 120ms; }
 
                             HorizontalLayout {
                                 alignment: center;
+                                spacing: 8px;
                                 Text {
-                                    text: "Browse Files";
+                                    text: "📂 Browse Files";
                                     font-size: 12px;
-                                    font-weight: 600;
+                                    font-weight: 700;
                                     color: #ffffff;
                                     vertical-alignment: center;
                                 }
@@ -328,7 +531,7 @@ export component DesktopApp inherits Window {
                     }
                 }
 
-                // زر فتح مجلد التنزيلات
+                // زر فتح مجلد التنزيلات المستلمة
                 Rectangle {
                     background: rec-files-touch.pressed ? Theme.surface-pressed : rec-files-touch.has-hover ? Theme.surface-hover : Theme.surface;
                     border-width: 1px;
@@ -345,9 +548,9 @@ export component DesktopApp inherits Window {
                         alignment: center;
                         spacing: 8px;
                         Text {
-                            text: "Open Received Files Folder";
+                            text: "📁 Open Received Downloads Folder";
                             font-size: 12px;
-                            font-weight: 500;
+                            font-weight: 600;
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                         }
@@ -355,18 +558,208 @@ export component DesktopApp inherits Window {
                 }
             }
 
-            // ===== العمود الأيمن: الحافظة التزامنية وسجل النشاط =====
+            // ===== العمود الأيمن: استوديو الملاحظات والكتابة المباشرة + الحافظة =====
             VerticalLayout {
                 spacing: 12px;
                 horizontal-stretch: 1;
 
-                // بطاقة الحافظة اللحظية (Live Synced Clipboard)
+                // 1. محرر الملاحظات والنصوص المباشر (Direct Note & Text Stream Composer)
+                Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: draft-input.has-focus ? Theme.border-focus : Theme.border;
+                    border-radius: Theme.radius-md;
+                    vertical-stretch: 1;
+                    animate border-color { duration: 120ms; }
+
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 12px;
+
+                        // شريط أدوات المحرر العلوي
+                        HorizontalLayout {
+                            alignment: space-between;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+                                Text {
+                                    text: "DIRECT BEAM & NOTES";
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    color: Theme.text-primary;
+                                    letter-spacing: 1.2px;
+                                }
+                                Rectangle {
+                                    background: #00d2ff18;
+                                    border-radius: 4px;
+                                    height: 18px;
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        Text {
+                                            text: "Live Stream";
+                                            font-size: 9px;
+                                            font-weight: 700;
+                                            color: Theme.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                // زر لصق ما في الحافظة في المحرر بلمسة واحدة
+                                Rectangle {
+                                    background: paste-touch.pressed ? #1c263c : paste-touch.has-hover ? #172033 : #0e1422;
+                                    border-width: 1px;
+                                    border-color: paste-touch.has-hover ? Theme.border-focus : Theme.border;
+                                    border-radius: 6px;
+                                    height: 26px;
+                                    animate background { duration: 120ms; }
+                                    paste-touch := TouchArea {
+                                        clicked => { root.paste_to_draft(); }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        Text {
+                                            text: "📋 Paste Clipboard";
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            color: Theme.text-secondary;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // زر مسح المسودة
+                                if root.draft_text != "" : Rectangle {
+                                    background: clear-draft-touch.pressed ? #f43f5e33 : clear-draft-touch.has-hover ? #f43f5e22 : #0e1422;
+                                    border-width: 1px;
+                                    border-color: clear-draft-touch.has-hover ? #f43f5e66 : Theme.border;
+                                    border-radius: 6px;
+                                    height: 26px;
+                                    animate background { duration: 120ms; }
+                                    clear-draft-touch := TouchArea {
+                                        clicked => { root.clear_draft(); }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        Text {
+                                            text: "🧹 Clear";
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: Theme.status-error;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // حقل الكتابة متعدد الأسطر فائق النقاء
+                        Rectangle {
+                            background: Theme.recessed;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: draft-input.has-focus ? #00d2ff66 : Theme.border-subtle;
+                            vertical-stretch: 1;
+
+                            if root.draft_text == "" : Text {
+                                text: "Type a note, phone number, link, code snippet or message to beam instantly to phone (Ctrl+Enter)...";
+                                font-size: 13px;
+                                color: Theme.text-faint;
+                                wrap: word-wrap;
+                                x: 12px;
+                                y: 12px;
+                                width: parent.width - 24px;
+                            }
+
+                            draft-input := TextInput {
+                                text <=> root.draft_text;
+                                single-line: false;
+                                wrap: word-wrap;
+                                font-size: 13px;
+                                color: Theme.text-primary;
+                                selection-background-color: #00d2ff44;
+                                selection-foreground-color: #ffffff;
+                                x: 12px;
+                                y: 10px;
+                                width: parent.width - 24px;
+                                height: parent.height - 20px;
+                            }
+                        }
+
+                        // شريط الإرسال ومعلومات المسودة
+                        HorizontalLayout {
+                            alignment: space-between;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+                                Text {
+                                    text: root.draft_text != "" ? "Ready to beam" : "Direct stream buffer";
+                                    font-size: 11px;
+                                    color: root.draft_text != "" ? Theme.accent : Theme.text-muted;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: 1px;
+                                    height: 12px;
+                                    background: Theme.border;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                                Text {
+                                    text: "Tip: Click Beam or hit Send";
+                                    font-size: 10px;
+                                    color: Theme.text-faint;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // الزر الأساسي البارز لإرسال النص مباشرة للهاتف
+                            Rectangle {
+                                background: send-beam-touch.pressed ? #0284c7 : send-beam-touch.has-hover ? #0369a1 : #0284c7;
+                                border-width: 1px;
+                                border-color: Theme.accent;
+                                border-radius: Theme.radius-sm;
+                                height: 34px;
+                                animate background { duration: 120ms; }
+
+                                send-beam-touch := TouchArea {
+                                    clicked => { root.send_custom_text(root.draft_text); }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    spacing: 8px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: root.text_sent ? "✓ Sent to Phone!" : "🚀 Beam to Phone";
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. بطاقة الحافظة اللحظية المستلمة (Received Synced Data)
                 Rectangle {
                     background: Theme.surface;
                     border-width: 1px;
                     border-color: Theme.border;
                     border-radius: Theme.radius-md;
-                    height: 170px;
+                    height: 150px;
 
                     VerticalLayout {
                         padding: 14px;
@@ -374,35 +767,66 @@ export component DesktopApp inherits Window {
 
                         HorizontalLayout {
                             alignment: space-between;
-                            Text {
-                                text: "LIVE CLIPBOARD";
-                                font-size: 11px;
-                                font-weight: 600;
-                                color: Theme.text-muted;
-                                letter-spacing: 1px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+                                Text {
+                                    text: "RECEIVED CLIPBOARD FROM PHONE";
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    color: Theme.text-muted;
+                                    letter-spacing: 1px;
+                                }
+                                if root.clipboard_cleaned : Rectangle {
+                                    background: #00d2ff18;
+                                    border-radius: 4px;
+                                    border-width: 1px;
+                                    border-color: #00d2ff33;
+                                    height: 18px;
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        Text {
+                                            text: "Cleaned";
+                                            font-size: 9px;
+                                            font-weight: 700;
+                                            color: Theme.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
                             }
 
-                            if root.clipboard_cleaned : Rectangle {
-                                background: #10b98115;
-                                border-radius: 4px;
-                                border-width: 1px;
-                                border-color: #10b98133;
-                                height: 18px;
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    Text {
-                                        text: "Cleaned";
-                                        font-size: 9px;
-                                        font-weight: 600;
-                                        color: Theme.accent;
-                                        vertical-alignment: center;
+                            // أزرار الحافظة
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                Rectangle {
+                                    background: copy-clip-touch.pressed ? #1c263c : copy-clip-touch.has-hover ? #172033 : #0e1422;
+                                    border-width: 1px;
+                                    border-color: copy-clip-touch.has-hover ? Theme.border-focus : Theme.border;
+                                    border-radius: 6px;
+                                    height: 24px;
+                                    animate background { duration: 120ms; }
+                                    copy-clip-touch := TouchArea {
+                                        clicked => { root.copy_clipboard_clicked(); }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        Text {
+                                            text: root.clipboard_copied ? "✓ Copied" : "Copy to PC";
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            color: root.clipboard_copied ? Theme.accent : Theme.text-secondary;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        // صندوق محتوى الحافظة
+                        // صندوق محتوى الحافظة المستلمة
                         Rectangle {
                             background: Theme.recessed;
                             border-radius: Theme.radius-sm;
@@ -412,7 +836,7 @@ export component DesktopApp inherits Window {
 
                             Text {
                                 text: root.clipboard_text;
-                                font-size: 13px;
+                                font-size: 12px;
                                 color: root.clipboard_text == "No clipboard synced yet" ? Theme.text-faint : Theme.text-primary;
                                 wrap: word-wrap;
                                 x: 12px;
@@ -421,257 +845,131 @@ export component DesktopApp inherits Window {
                                 height: parent.height - 20px;
                             }
                         }
+                    }
+                }
+            }
+        }
 
-                        // أزرار التحكم بالحافظة
+        // 4. عرض سجل النشاطات الكامل (إذا كان تبويب Activity مختاراً)
+        if root.active_tab == "history" : Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "COMPLETE TRANSFER & BEAM HISTORY";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                        letter-spacing: 1.2px;
+                    }
+
+                    if root.history_items.length > 0 : Rectangle {
+                        background: clear-all-touch.pressed ? #f43f5e33 : clear-all-touch.has-hover ? #f43f5e22 : #00000000;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: clear-all-touch.has-hover ? #f43f5e55 : Theme.border;
+                        height: 26px;
+                        clear-all-touch := TouchArea {
+                            clicked => { root.clear_history(); }
+                        }
                         HorizontalLayout {
-                            alignment: end;
-                            spacing: 8px;
-
-                            Rectangle {
-                                background: copy-touch.pressed ? Theme.surface-pressed : copy-touch.has-hover ? Theme.surface-hover : #00000000;
-                                border-width: 1px;
-                                border-color: copy-touch.has-hover ? Theme.border : Theme.border-subtle;
-                                border-radius: 6px;
-                                height: 26px;
-                                animate background { duration: 120ms; }
-                                copy-touch := TouchArea {
-                                    clicked => { root.copy_clipboard_clicked(); }
-                                }
-                                HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    Text {
-                                        text: root.clipboard_copied ? "Copied" : "Copy";
-                                        font-size: 11px;
-                                        font-weight: 500;
-                                        color: root.clipboard_copied ? Theme.accent : Theme.text-secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-
-                            Rectangle {
-                                background: send-clip-touch.pressed ? #10b98126 : send-clip-touch.has-hover ? #10b98114 : #00000000;
-                                border-width: 1px;
-                                border-color: send-clip-touch.has-hover ? #10b98144 : Theme.border-subtle;
-                                border-radius: 6px;
-                                height: 26px;
-                                animate background { duration: 120ms; }
-                                send-clip-touch := TouchArea {
-                                    clicked => { root.send_clipboard_clicked(); }
-                                }
-                                HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    Text {
-                                        text: root.clipboard_pushed ? "Sent" : "Push to Phone";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Theme.accent;
-                                        vertical-alignment: center;
-                                    }
-                                }
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            Text {
+                                text: "Clear History";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
                             }
                         }
                     }
                 }
 
-                // بطاقة النقل المباشر (Active Transfer Card)
-                if root.transfer_active : Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    border-radius: Theme.radius-sm;
-                    height: 56px;
+                if root.history_items.length == 0 : VerticalLayout {
+                    alignment: center;
+                    vertical-stretch: 1;
+                    spacing: 8px;
+                    Text {
+                        text: "No transfers or beamed notes yet in this session";
+                        font-size: 13px;
+                        color: Theme.text-muted;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "Items you beam or transfer will appear here with instant verification status";
+                        font-size: 11px;
+                        color: Theme.text-faint;
+                        horizontal-alignment: center;
+                    }
+                }
 
+                if root.history_items.length > 0 : ScrollView {
+                    vertical-stretch: 1;
                     VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-
-                        HorizontalLayout {
-                            alignment: space-between;
-                            Text {
-                                text: root.transfer_name;
-                                font-size: 12px;
-                                font-weight: 500;
-                                color: Theme.text-primary;
-                                overflow: elide;
-                                horizontal-stretch: 1;
-                            }
+                        spacing: 8px;
+                        for item in root.history_items : Rectangle {
+                            background: Theme.recessed;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            height: 48px;
 
                             HorizontalLayout {
-                                spacing: 8px;
-                                Rectangle {
-                                    background: Theme.recessed;
-                                    border-radius: 4px;
-                                    border-width: 1px;
-                                    border-color: Theme.border-subtle;
-                                    height: 20px;
-                                    HorizontalLayout {
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
-                                            text: root.transfer_status;
-                                            font-size: 10px;
-                                            color: Theme.accent;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 12px;
+                                alignment: center;
 
                                 Rectangle {
-                                    width: 24px;
-                                    height: 20px;
-                                    border-radius: 4px;
-                                    background: cancel-touch.pressed ? #ef444433 : cancel-touch.has-hover ? #ef444422 : #00000000;
-                                    animate background { duration: 120ms; }
-                                    cancel-touch := TouchArea {
-                                        clicked => { root.cancel_transfer_clicked(); }
-                                    }
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 8px;
+                                    background: item.kind == "file" ? #00d2ff18 : #6366f118;
+                                    border-width: 1px;
+                                    border-color: item.kind == "file" ? #00d2ff44 : #6366f144;
+                                    y: (parent.height - self.height) / 2;
+
                                     Text {
-                                        text: "x";
+                                        text: item.kind == "file" ? "📁" : "⚡";
                                         font-size: 12px;
-                                        font-weight: 700;
-                                        color: Theme.status-error;
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
                                     }
                                 }
-                            }
-                        }
 
-                        Rectangle {
-                            height: 4px;
-                            border-radius: 2px;
-                            background: Theme.recessed;
-
-                            Rectangle {
-                                x: 0;
-                                y: 0;
-                                height: parent.height;
-                                width: parent.width * root.transfer_progress;
-                                border-radius: 2px;
-                                background: Theme.accent;
-                                animate width { duration: 100ms; easing: ease-out; }
-                            }
-                        }
-                    }
-                }
-
-                // بطاقة سجل النشاطات الأخير (Activity History Panel)
-                Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    border-radius: Theme.radius-md;
-                    vertical-stretch: 1;
-
-                    VerticalLayout {
-                        padding: 14px;
-                        spacing: 8px;
-
-                        HorizontalLayout {
-                            alignment: space-between;
-                            Text {
-                                text: "ACTIVITY HISTORY";
-                                font-size: 11px;
-                                font-weight: 600;
-                                color: Theme.text-muted;
-                                letter-spacing: 1px;
-                            }
-
-                            if root.history_items.length > 0 : Rectangle {
-                                background: clear-touch.pressed ? Theme.surface-pressed : clear-touch.has-hover ? Theme.surface-hover : #00000000;
-                                border-radius: 4px;
-                                height: 20px;
-                                clear-touch := TouchArea {
-                                    clicked => { root.clear_history(); }
-                                }
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    alignment: center;
                                     Text {
-                                        text: "Clear";
-                                        font-size: 10px;
+                                        text: item.title;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: Theme.text-primary;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: item.subtitle;
+                                        font-size: 11px;
                                         color: Theme.text-muted;
-                                        vertical-alignment: center;
                                     }
                                 }
-                            }
-                        }
 
-                        if root.history_items.length == 0 : VerticalLayout {
-                            alignment: center;
-                            vertical-stretch: 1;
-                            Text {
-                                text: "No transfers yet in this session";
-                                font-size: 12px;
-                                color: Theme.text-faint;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        if root.history_items.length > 0 : ScrollView {
-                            vertical-stretch: 1;
-                            VerticalLayout {
-                                spacing: 6px;
-                                for item in root.history_items : Rectangle {
-                                    background: Theme.recessed;
-                                    border-radius: Theme.radius-sm;
-                                    border-width: 1px;
-                                    border-color: Theme.border-subtle;
-                                    height: 44px;
-
-                                    HorizontalLayout {
-                                        padding-left: 12px;
-                                        padding-right: 12px;
-                                        spacing: 10px;
-                                        alignment: center;
-
-                                        Rectangle {
-                                            width: 26px;
-                                            height: 26px;
-                                            border-radius: 6px;
-                                            background: item.kind == "file" ? #10b98118 : #3b82f618;
-                                            border-width: 1px;
-                                            border-color: item.kind == "file" ? #10b98133 : #3b82f633;
-                                            y: (parent.height - self.height) / 2;
-
-                                            Text {
-                                                text: item.kind == "file" ? "F" : "C";
-                                                font-size: 11px;
-                                                font-weight: 700;
-                                                color: item.kind == "file" ? Theme.accent : #60a5fa;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            Text {
-                                                text: item.title;
-                                                font-size: 12px;
-                                                font-weight: 500;
-                                                color: Theme.text-primary;
-                                                overflow: elide;
-                                            }
-                                            Text {
-                                                text: item.subtitle;
-                                                font-size: 10px;
-                                                color: Theme.text-muted;
-                                            }
-                                        }
-
-                                        Text {
-                                            text: item.timestamp;
-                                            font-size: 10px;
-                                            color: Theme.text-muted;
-                                            vertical-alignment: center;
-                                        }
-                                    }
+                                Text {
+                                    text: item.timestamp;
+                                    font-size: 11px;
+                                    color: Theme.text-muted;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
