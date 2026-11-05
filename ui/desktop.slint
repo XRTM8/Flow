@@ -7,7 +7,7 @@ export component DesktopApp inherits Window {
     width: 360px;
     height: 540px;
     background: Theme.background;
-    default-font-family: "Segoe UI, sans-serif";
+    default-font-family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
     in-out property <string> peer_name: "Scanning Wi-Fi...";
     in-out property <bool> is_connected: false;
@@ -19,6 +19,12 @@ export component DesktopApp inherits Window {
     in-out property <string> transfer_status: "";
     in-out property <bool> show_history: false;
     in-out property <[HistoryItem]> history_items: [];
+    in-out property <bool> clipboard_copied: false;
+    in-out property <bool> clipboard_pushed: false;
+    in-out property <string> sas_code: "";
+    in-out property <bool> update_available: false;
+    in-out property <string> update_version: "";
+    in-out property <bool> update_in_progress: false;
 
     callback copy_clipboard_clicked();
     callback send_clipboard_clicked();
@@ -27,6 +33,7 @@ export component DesktopApp inherits Window {
     callback toggle_history();
     callback clear_history();
     callback cancel_transfer_clicked();
+    callback apply_update_clicked();
 
     VerticalLayout {
         padding: 20px;
@@ -56,34 +63,84 @@ export component DesktopApp inherits Window {
                 }
             }
 
-            // مؤشر حالة الاتصال (Peer Status Pill)
-            Rectangle {
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: Theme.border;
-                border-radius: 12px;
-                height: 26px;
+            HorizontalLayout {
+                spacing: 6px;
 
-                HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    spacing: 6px;
-                    alignment: center;
-
-                    // نقطة الحالة المضيئة
-                    Rectangle {
-                        width: 7px;
-                        height: 7px;
-                        border-radius: 3.5px;
-                        background: root.is_connected ? Theme.status-online : Theme.status-waiting;
-                        y: (parent.height - self.height) / 2;
+                if root.update_available : Rectangle {
+                    background: update-touch.pressed ? #3b82f644 : update-touch.has-hover ? #3b82f628 : #3b82f618;
+                    border-width: 1px;
+                    border-color: #3b82f655;
+                    border-radius: 13px;
+                    height: 26px;
+                    animate background { duration: 120ms; }
+                    update-touch := TouchArea {
+                        clicked => { root.apply_update_clicked(); }
                     }
+                    HorizontalLayout {
+                        padding-left: 9px;
+                        padding-right: 9px;
+                        alignment: center;
+                        Text {
+                            text: root.update_in_progress ? "Updating..." : "↑ " + root.update_version;
+                            font-size: 10px;
+                            font-weight: 600;
+                            color: #60a5fa;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
 
-                    Text {
-                        text: root.peer_name;
-                        font-size: 11px;
-                        color: root.is_connected ? Theme.text-secondary : Theme.text-muted;
-                        vertical-alignment: center;
+                // مؤشر حالة الاتصال الأنيق (Precision Peer Status Pill)
+                Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 13px;
+                    height: 26px;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 6px;
+                        alignment: center;
+
+                        // نقطة الحالة الهادئة مع حلقة إضاءة خافتة
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: root.is_connected ? Theme.status-online : Theme.status-waiting;
+                            border-width: 1px;
+                            border-color: root.is_connected ? #10b98144 : #f59e0b44;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: root.peer_name;
+                            font-size: 11px;
+                            font-weight: 500;
+                            color: root.is_connected ? Theme.text-secondary : Theme.text-muted;
+                            vertical-alignment: center;
+                        }
+
+                        if root.is_connected && root.sas_code != "" : Rectangle {
+                            background: Theme.recessed;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            height: 16px;
+                            HorizontalLayout {
+                                padding-left: 5px;
+                                padding-right: 5px;
+                                Text {
+                                    text: "#" + root.sas_code;
+                                    font-size: 9px;
+                                    font-weight: 600;
+                                    color: Theme.accent;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -95,7 +152,7 @@ export component DesktopApp inherits Window {
             border-width: 1px;
             border-color: Theme.border;
             border-radius: Theme.radius-md;
-            height: 140px;
+            height: 142px;
 
             VerticalLayout {
                 padding: 14px;
@@ -123,6 +180,7 @@ export component DesktopApp inherits Window {
                             Text {
                                 text: "Cleaned";
                                 font-size: 9px;
+                                font-weight: 600;
                                 color: Theme.accent;
                                 vertical-alignment: center;
                             }
@@ -130,18 +188,18 @@ export component DesktopApp inherits Window {
                     }
                 }
 
-                // محتوى الحافظة
+                // محتوى الحافظة داخل مساحة داخلية مجوفة (Recessed Container)
                 Rectangle {
-                    background: #080a0f;
+                    background: Theme.recessed;
                     border-radius: Theme.radius-sm;
                     border-width: 1px;
-                    border-color: Theme.border;
+                    border-color: Theme.border-subtle;
                     vertical-stretch: 1;
 
                     Text {
                         text: root.clipboard_text;
                         font-size: 12px;
-                        color: Theme.text-primary;
+                        color: root.clipboard_text == "No clipboard synced yet" ? Theme.text-faint : Theme.text-primary;
                         wrap: word-wrap;
                         x: 10px;
                         y: 10px;
@@ -150,47 +208,53 @@ export component DesktopApp inherits Window {
                     }
                 }
 
-                // شريط أزرار الحافظة
+                // أزرار الحافظة الدقيقة مع استجابة بصرية هادئة
                 HorizontalLayout {
                     alignment: end;
                     spacing: 8px;
 
                     Rectangle {
-                        background: copy-touch.has-hover ? Theme.surface-hover : #00000000;
+                        background: copy-touch.pressed ? Theme.surface-pressed : copy-touch.has-hover ? Theme.surface-hover : #00000000;
                         border-width: 1px;
-                        border-color: Theme.border;
+                        border-color: copy-touch.has-hover ? Theme.border : Theme.border-subtle;
                         border-radius: 6px;
                         height: 24px;
+                        animate background { duration: 120ms; }
+                        animate border-color { duration: 120ms; }
                         copy-touch := TouchArea {
                             clicked => { root.copy_clipboard_clicked(); }
                         }
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
+                            padding-left: 10px;
+                            padding-right: 10px;
                             Text {
-                                text: "Copy";
+                                text: root.clipboard_copied ? "✓ Copied" : "Copy";
                                 font-size: 11px;
-                                color: Theme.text-secondary;
+                                font-weight: 500;
+                                color: root.clipboard_copied ? Theme.accent : Theme.text-secondary;
                                 vertical-alignment: center;
                             }
                         }
                     }
 
                     Rectangle {
-                        background: send-clip-touch.has-hover ? Theme.surface-hover : #00000000;
+                        background: send-clip-touch.pressed ? #10b98126 : send-clip-touch.has-hover ? #10b98114 : #00000000;
                         border-width: 1px;
-                        border-color: Theme.border;
+                        border-color: send-clip-touch.has-hover ? #10b98144 : Theme.border-subtle;
                         border-radius: 6px;
                         height: 24px;
+                        animate background { duration: 120ms; }
+                        animate border-color { duration: 120ms; }
                         send-clip-touch := TouchArea {
                             clicked => { root.send_clipboard_clicked(); }
                         }
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
+                            padding-left: 10px;
+                            padding-right: 10px;
                             Text {
-                                text: "Push to Phone";
+                                text: root.clipboard_pushed ? "✓ Sent" : "Push to Phone";
                                 font-size: 11px;
+                                font-weight: 600;
                                 color: Theme.accent;
                                 vertical-alignment: center;
                             }
@@ -200,12 +264,14 @@ export component DesktopApp inherits Window {
             }
         }
 
-        // 3. منطقة سحب وإفلات الملفات (Direct Drop Zone)
+        // 3. مساحة إرسال وسحب الملفات (Direct Drop Zone)
         drop-area := Rectangle {
             background: drop-touch.has-hover ? Theme.surface-hover : Theme.surface;
             border-width: 1.5px;
             border-color: drop-touch.has-hover ? Theme.accent : Theme.border;
             border-radius: Theme.radius-md;
+            animate background { duration: 150ms; }
+            animate border-color { duration: 150ms; }
             vertical-stretch: 1;
 
             drop-touch := TouchArea {
@@ -216,20 +282,23 @@ export component DesktopApp inherits Window {
                 alignment: center;
                 spacing: 10px;
 
-                // أيقونة مبسطة ناصعة
                 Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 20px;
-                    background: drop-touch.has-hover ? Theme.accent-glow : #080a0f;
+                    width: 42px;
+                    height: 42px;
+                    border-radius: 21px;
+                    background: drop-touch.has-hover ? Theme.accent-glow : Theme.recessed;
                     border-width: 1px;
                     border-color: drop-touch.has-hover ? Theme.accent : Theme.border;
+                    animate background { duration: 150ms; }
+                    animate border-color { duration: 150ms; }
                     x: (parent.width - self.width) / 2;
 
                     Text {
                         text: "↑";
                         font-size: 18px;
+                        font-weight: 600;
                         color: drop-touch.has-hover ? Theme.accent : Theme.text-secondary;
+                        animate color { duration: 150ms; }
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
@@ -238,7 +307,7 @@ export component DesktopApp inherits Window {
                 VerticalLayout {
                     spacing: 3px;
                     Text {
-                        text: "Drag & drop files here, or click to send";
+                        text: "Drop files to send, or click to browse";
                         font-size: 12px;
                         font-weight: 500;
                         color: Theme.text-primary;
@@ -254,16 +323,16 @@ export component DesktopApp inherits Window {
             }
         }
 
-        // 4. شريط تقدم النقل (يظهر فقط أثناء النقل النشط مع زر الإلغاء)
+        // 4. بطاقة تقدم النقل الحية (Active Transfer Status Card)
         if root.transfer_active : Rectangle {
             background: Theme.surface;
             border-width: 1px;
             border-color: Theme.border;
             border-radius: Theme.radius-sm;
-            height: 48px;
+            height: 52px;
 
             VerticalLayout {
-                padding: 8px;
+                padding: 10px;
                 spacing: 6px;
 
                 HorizontalLayout {
@@ -271,31 +340,49 @@ export component DesktopApp inherits Window {
                     Text {
                         text: root.transfer_name;
                         font-size: 11px;
+                        font-weight: 500;
                         color: Theme.text-primary;
                         overflow: elide;
-                        width: 170px;
+                        width: 150px;
                     }
 
                     HorizontalLayout {
                         spacing: 8px;
-                        Text {
-                            text: root.transfer_status;
-                            font-size: 11px;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
+
+                        // شارة السرعة الحية بخط رقمي ثابت لمنع الاهتزاز
                         Rectangle {
-                            width: 18px;
-                            height: 18px;
-                            border-radius: 9px;
-                            background: cancel-touch.has-hover ? #ef444433 : #00000000;
+                            background: Theme.recessed;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            height: 20px;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                Text {
+                                    text: root.transfer_status;
+                                    font-size: 10px;
+                                    color: Theme.accent;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // زر إلغاء النقل الهادئ
+                        Rectangle {
+                            width: 20px;
+                            height: 20px;
+                            border-radius: 10px;
+                            background: cancel-touch.has-hover ? #ef444426 : #00000000;
+                            animate background { duration: 120ms; }
                             cancel-touch := TouchArea {
                                 clicked => { root.cancel_transfer_clicked(); }
                             }
                             Text {
                                 text: "✕";
                                 font-size: 10px;
-                                color: Theme.status-error;
+                                font-weight: 700;
+                                color: cancel-touch.has-hover ? Theme.status-error : Theme.text-muted;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
@@ -303,13 +390,13 @@ export component DesktopApp inherits Window {
                     }
                 }
 
-                // مسار شريط التقدم
+                // مسار شريط التقدم السلس
                 Rectangle {
                     height: 4px;
                     border-radius: 2px;
-                    background: #080a0f;
+                    background: Theme.recessed;
 
-                    // المؤشر المتزايد
+                    // المؤشر المتزايد السلس
                     Rectangle {
                         x: 0;
                         y: 0;
@@ -317,6 +404,7 @@ export component DesktopApp inherits Window {
                         width: parent.width * root.transfer_progress;
                         border-radius: 2px;
                         background: Theme.accent;
+                        animate width { duration: 100ms; easing: ease-out; }
                     }
                 }
             }
@@ -328,18 +416,23 @@ export component DesktopApp inherits Window {
             height: 28px;
 
             Rectangle {
-                background: downloads-touch.has-hover ? Theme.surface : #00000000;
+                background: downloads-touch.pressed ? Theme.surface-pressed : downloads-touch.has-hover ? Theme.surface : #00000000;
                 border-radius: 6px;
+                border-width: 1px;
+                border-color: downloads-touch.has-hover ? Theme.border-subtle : #00000000;
+                animate background { duration: 120ms; }
+                animate border-color { duration: 120ms; }
                 downloads-touch := TouchArea {
                     clicked => { root.open_downloads_clicked(); }
                 }
                 HorizontalLayout {
-                    padding-left: 6px;
-                    padding-right: 6px;
-                    spacing: 4px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 5px;
                     Text {
-                        text: "📁 Received Files";
+                        text: "Received Files";
                         font-size: 11px;
+                        font-weight: 500;
                         color: Theme.text-secondary;
                         vertical-alignment: center;
                     }
@@ -347,18 +440,23 @@ export component DesktopApp inherits Window {
             }
 
             Rectangle {
-                background: history-touch.has-hover ? Theme.surface : #00000000;
+                background: history-touch.pressed ? Theme.surface-pressed : history-touch.has-hover ? Theme.surface : #00000000;
                 border-radius: 6px;
+                border-width: 1px;
+                border-color: history-touch.has-hover ? Theme.border-subtle : #00000000;
+                animate background { duration: 120ms; }
+                animate border-color { duration: 120ms; }
                 history-touch := TouchArea {
                     clicked => { root.toggle_history(); }
                 }
                 HorizontalLayout {
-                    padding-left: 6px;
-                    padding-right: 6px;
-                    spacing: 4px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 5px;
                     Text {
-                        text: "📜 Activity History";
+                        text: "History";
                         font-size: 11px;
+                        font-weight: 500;
                         color: root.show_history ? Theme.accent : Theme.text-secondary;
                         vertical-alignment: center;
                     }
@@ -367,11 +465,11 @@ export component DesktopApp inherits Window {
         }
     }
 
-    // 6. واجهة سجل التحويلات المنبثقة (Transfer Activity History Drawer)
+    // 6. واجهة سجل التحويلات المنبثقة (Activity History Drawer)
     if root.show_history : Rectangle {
         width: parent.width;
         height: parent.height;
-        background: #0c0e14fa;
+        background: #0b0d13f5;
         x: 0;
         y: 0;
 
@@ -383,11 +481,11 @@ export component DesktopApp inherits Window {
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: "TRANSFER HISTORY";
+                    text: "ACTIVITY HISTORY";
                     font-size: 11px;
                     font-weight: 700;
                     color: Theme.text-primary;
-                    letter-spacing: 1px;
+                    letter-spacing: 1.2px;
                     vertical-alignment: center;
                 }
 
@@ -396,11 +494,12 @@ export component DesktopApp inherits Window {
 
                     // زر مسح السجل
                     Rectangle {
-                        background: clear-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                        background: clear-touch.pressed ? Theme.surface-pressed : clear-touch.has-hover ? Theme.surface-hover : Theme.surface;
                         border-width: 1px;
                         border-color: Theme.border;
                         border-radius: 6px;
                         height: 24px;
+                        animate background { duration: 120ms; }
                         clear-touch := TouchArea {
                             clicked => { root.clear_history(); }
                         }
@@ -410,6 +509,7 @@ export component DesktopApp inherits Window {
                             Text {
                                 text: "Clear";
                                 font-size: 10px;
+                                font-weight: 500;
                                 color: Theme.text-muted;
                                 vertical-alignment: center;
                             }
@@ -421,15 +521,17 @@ export component DesktopApp inherits Window {
                         width: 24px;
                         height: 24px;
                         border-radius: 12px;
-                        background: close-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                        background: close-touch.pressed ? Theme.surface-pressed : close-touch.has-hover ? Theme.surface-hover : Theme.surface;
                         border-width: 1px;
                         border-color: Theme.border;
+                        animate background { duration: 120ms; }
                         close-touch := TouchArea {
                             clicked => { root.toggle_history(); }
                         }
                         Text {
                             text: "✕";
                             font-size: 11px;
+                            font-weight: 600;
                             color: Theme.text-secondary;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
@@ -453,13 +555,14 @@ export component DesktopApp inherits Window {
                             Text {
                                 text: "No transfer history yet";
                                 font-size: 12px;
+                                font-weight: 500;
                                 color: Theme.text-muted;
                                 horizontal-alignment: center;
                             }
                             Text {
                                 text: "Sent and received files will appear here";
                                 font-size: 10px;
-                                color: #475569;
+                                color: Theme.text-faint;
                                 horizontal-alignment: center;
                             }
                         }
@@ -477,18 +580,21 @@ export component DesktopApp inherits Window {
                             spacing: 10px;
                             alignment: center;
 
-                            // أيقونة نوع العنصر
+                            // مؤشر نوع العنصر الأنيق
                             Rectangle {
                                 width: 32px;
                                 height: 32px;
                                 border-radius: 6px;
-                                background: #080a0f;
+                                background: Theme.recessed;
                                 border-width: 1px;
-                                border-color: Theme.border;
+                                border-color: Theme.border-subtle;
 
                                 Text {
-                                    text: item.kind == "file" ? "📄" : "📋";
-                                    font-size: 14px;
+                                    text: item.kind == "file" ? "FILE" : "CLIP";
+                                    font-size: 8px;
+                                    font-weight: 700;
+                                    letter-spacing: 0.5px;
+                                    color: Theme.text-secondary;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                 }

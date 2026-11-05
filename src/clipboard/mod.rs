@@ -1,7 +1,7 @@
+#[cfg(not(target_os = "android"))]
 use arboard::Clipboard;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub struct ClipboardManager {
@@ -17,22 +17,63 @@ impl ClipboardManager {
 
     /// قراءة محتوى الحافظة الحالي
     pub fn read_current() -> Option<String> {
-        let mut clipboard = Clipboard::new().ok()?;
-        clipboard.get_text().ok()
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut clipboard = Clipboard::new().ok()?;
+            clipboard.get_text().ok()
+        }
+        #[cfg(target_os = "android")]
+        {
+            None
+        }
     }
 
     /// التحقق مما إذا كانت الحافظة تحتوي على صورة ممسوحة (لقطة شاشة)
     pub fn read_current_image_bytes() -> Option<(usize, usize, Vec<u8>)> {
-        let mut clipboard = Clipboard::new().ok()?;
-        let img = clipboard.get_image().ok()?;
-        Some((img.width, img.height, img.bytes.into_owned()))
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut clipboard = Clipboard::new().ok()?;
+            let img = clipboard.get_image().ok()?;
+            Some((img.width, img.height, img.bytes.into_owned()))
+        }
+        #[cfg(target_os = "android")]
+        {
+            None
+        }
     }
 
     /// تعيين نص جديد في الحافظة
     pub fn set_text(text: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut clipboard = Clipboard::new()?;
-        clipboard.set_text(text)?;
-        Ok(())
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut clipboard = Clipboard::new()?;
+            clipboard.set_text(text)?;
+            Ok(())
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = text;
+            Ok(())
+        }
+    }
+
+    /// تعيين صورة في الحافظة
+    pub fn set_image(width: usize, height: usize, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut clipboard = Clipboard::new()?;
+            clipboard.set_image(arboard::ImageData {
+                width,
+                height,
+                bytes: std::borrow::Cow::Borrowed(data),
+            })?;
+            Ok(())
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = (width, height, data);
+            Ok(())
+        }
     }
 
     /// بدء مراقبة الحافظة في الخلفية مع التعافي التلقائي من أقفال نظام التشغيل (Anti-Zombie Thread)
@@ -40,6 +81,7 @@ impl ClipboardManager {
         let running = self.running.clone();
         running.store(true, Ordering::SeqCst);
 
+        #[cfg(not(target_os = "android"))]
         std::thread::spawn(move || {
             let mut last_content = String::new();
 
@@ -48,7 +90,7 @@ impl ClipboardManager {
                 let mut clipboard = match Clipboard::new() {
                     Ok(cb) => cb,
                     Err(_) => {
-                        std::thread::sleep(Duration::from_millis(1000));
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
                         continue;
                     }
                 };
@@ -63,18 +105,29 @@ impl ClipboardManager {
                         }
                         Err(_) => {
                             // قفل مؤقت للحافظة من قبل تطبيق آخر في نظام التشغيل - نعيد المحاولة بسلاسة
-                            std::thread::sleep(Duration::from_millis(400));
+                            std::thread::sleep(std::time::Duration::from_millis(400));
                             break;
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(600));
+                    std::thread::sleep(std::time::Duration::from_millis(600));
                 }
             }
         });
+
+        #[cfg(target_os = "android")]
+        {
+            let _ = tx;
+        }
     }
 
     #[allow(dead_code)]
     pub fn stop_monitoring(&self) {
         self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Default for ClipboardManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

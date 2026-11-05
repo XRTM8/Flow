@@ -69,8 +69,26 @@ async fn find_available_tcp_port(start_port: u16) -> (u16, tokio::net::TcpListen
     (port, listener)
 }
 
+async fn pick_files_dialog(title: &str) -> Option<Vec<PathBuf>> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let handles = rfd::AsyncFileDialog::new()
+            .set_title(title)
+            .pick_files()
+            .await?;
+        Some(handles.into_iter().map(|f| f.path().to_path_buf()).collect())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = title;
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    otium_flow::protocol::updater::cleanup_old_executables();
+
     let args: Vec<String> = std::env::args().collect();
     let is_mobile_mode = args.contains(&"--mobile".to_string());
 
@@ -98,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     discovery.clone().start().await?;
 
     // 2. نظام الثقة وإدارة استقبال الملفات والحافظة مع دعم الإلغاء اللحظي
-    let trust_manager = Arc::new(TrustManager::new(download_dir.clone()));
+    let trust_manager = Arc::new(TrustManager::with_self_id(download_dir.clone(), persistent_device_id.clone()));
     let cancel_token = Arc::new(AtomicBool::new(false));
 
     let (event_tx, event_rx) = mpsc::unbounded_channel::<TransferEvent>();
@@ -167,6 +185,7 @@ fn dirs_or_fallback() -> PathBuf {
 }
 
 /// تشغيل واجهة الحاسوب
+#[allow(clippy::too_many_arguments)]
 async fn run_desktop(
     discovery: Arc<DiscoveryManager>,
     active_peer: Arc<RwLock<Option<Peer>>>,
@@ -189,6 +208,40 @@ async fn run_desktop(
     let clipboard_mgr = Arc::new(clipboard::ClipboardManager::new());
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
     clipboard_mgr.start_monitoring(clip_tx);
+
+    // فحص التحديثات التلقائي الصامت من GitHub بدون تضارب حزم
+    let update_info: Arc<RwLock<Option<otium_flow::protocol::updater::AvailableUpdate>>> = Arc::new(RwLock::new(None));
+    let ui_up = app_weak.clone();
+    let update_store = update_info.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        if let Ok(Some(upd)) = otium_flow::protocol::updater::check_latest_release().await {
+            *update_store.write().await = Some(upd.clone());
+            let _ = ui_up.upgrade_in_event_loop(move |ui| {
+                ui.set_update_available(true);
+                ui.set_update_version(upd.version.into());
+            });
+        }
+    });
+
+    let ui_apply = app_weak.clone();
+    let update_apply_store = update_info.clone();
+    app.on_apply_update_clicked(move || {
+        let ui_c = ui_apply.clone();
+        let store = update_apply_store.clone();
+        tokio::spawn(async move {
+            let upd_opt = store.read().await.clone();
+            if let Some(upd) = upd_opt {
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_update_in_progress(true);
+                });
+                let _ = otium_flow::protocol::updater::apply_update_in_place(&upd).await;
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_update_in_progress(false);
+                });
+            }
+        });
+    });
 
     let ui_clip = app_weak.clone();
     let echo_guard = last_received_text.clone();
@@ -217,6 +270,7 @@ async fn run_desktop(
     let d_clone = discovery.clone();
     let p_clone = active_peer.clone();
     let ui_handle = app_weak.clone();
+    let my_id_peer = persistent_device_id.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
@@ -232,22 +286,25 @@ async fn run_desktop(
 
             if let Some(peer) = selected {
                 *active = Some(peer.clone());
+                let sas = otium_flow::protocol::compute_sas_code(&my_id_peer, &peer.id);
                 // تمييز الأجهزة المتشابهة في الاسم بإضافة جزء فريد من المعرف
                 let name = if peers.iter().filter(|p| p.name == peer.name).count() > 1 {
                     let suffix = if peer.id.len() >= 4 { &peer.id[..4] } else { &peer.id };
-                    format!("{} (#{}) • Connected", peer.name, suffix)
+                    format!("{} (#{})", peer.name, suffix)
                 } else {
-                    format!("{} • Connected", peer.name)
+                    peer.name.clone()
                 };
                 let _ = ui_handle.upgrade_in_event_loop(move |ui| {
                     ui.set_is_connected(true);
                     ui.set_peer_name(name.into());
+                    ui.set_sas_code(sas.into());
                 });
             } else {
                 *active = None;
                 let _ = ui_handle.upgrade_in_event_loop(|ui| {
                     ui.set_is_connected(false);
                     ui.set_peer_name("Scanning Wi-Fi...".into());
+                    ui.set_sas_code("".into());
                 });
             }
         }
@@ -289,13 +346,7 @@ async fn run_desktop(
                     });
                 }
                 TransferEvent::ClipboardImageReceived { width, height, data } => {
-                    let _ = arboard::Clipboard::new().and_then(|mut cb| {
-                        cb.set_image(arboard::ImageData {
-                            width,
-                            height,
-                            bytes: std::borrow::Cow::Borrowed(&data),
-                        })
-                    });
+                    let _ = clipboard::ClipboardManager::set_image(width, height, &data);
 
                     let hist = hist_receive.clone();
                     tokio::spawn(async move {
@@ -325,9 +376,7 @@ async fn run_desktop(
                 }
                 TransferEvent::FileProgress { name: _, current_bytes, total_bytes, speed_mb_s, eta_secs } => {
                     let progress = current_bytes as f32 / total_bytes as f32;
-                    let mb_done = current_bytes as f64 / (1024.0 * 1024.0);
-                    let mb_total = total_bytes as f64 / (1024.0 * 1024.0);
-                    let status = format!("{:.1}/{:.1} MB • {:.1} MB/s ({}s)", mb_done, mb_total, speed_mb_s, eta_secs);
+                    let status = otium_flow::protocol::format_transfer_status(current_bytes, total_bytes, speed_mb_s, eta_secs);
 
                     let _ = ui_handle2.upgrade_in_event_loop(move |ui| {
                         ui.set_transfer_progress(progress);
@@ -372,14 +421,22 @@ async fn run_desktop(
         }
     });
 
-    // أزرار الواجهة
+    // أزرار الواجهة مع استجابة بصرية تفاعلية فورية
     let full_clip_copy = full_clipboard_text.clone();
+    let ui_copy_fb = app_weak.clone();
     app.on_copy_clipboard_clicked(move || {
         let text_arc = full_clip_copy.clone();
+        let ui_c = ui_copy_fb.clone();
         tokio::spawn(async move {
             let text = text_arc.read().await.clone();
-            if !text.is_empty() {
-                let _ = clipboard::ClipboardManager::set_text(&text);
+            if !text.is_empty() && clipboard::ClipboardManager::set_text(&text).is_ok() {
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_clipboard_copied(true);
+                });
+                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_clipboard_copied(false);
+                });
             }
         });
     });
@@ -389,12 +446,14 @@ async fn run_desktop(
     let hist_push = history.clone();
     let trust_clip = trust_manager.clone();
     let dev_id_clip = persistent_device_id.clone();
+    let ui_send_fb = app_weak.clone();
     app.on_send_clipboard_clicked(move || {
         let p_arc = p_send.clone();
         let clip_arc = full_clip_push.clone();
         let hist = hist_push.clone();
         let trust = trust_clip.clone();
         let dev_id = dev_id_clip.clone();
+        let ui_btn = ui_send_fb.clone();
         tokio::spawn(async move {
             let peer = { p_arc.read().await.clone() };
             if let Some(peer) = peer {
@@ -410,24 +469,44 @@ async fn run_desktop(
                 if !current.is_empty() {
                     let (cleaned, _) = clean_text(&current);
                     let target = SocketAddr::new(peer.ip, peer.tcp_port);
-                    let master_key = trust.get_master_key().await;
+                    let pairwise_key = trust.get_key_for_peer(&peer.id).await;
                     // إرسال الحافظة بتشفير عسكري ChaCha20-Poly1305 E2EE مع مفتاح معتمد وتوثيق هوية
                     let res = TransferManager::send_encrypted_clipboard_with_auth(
                         target,
                         cleaned.clone(),
                         Some(dev_id),
-                        Some(master_key),
+                        Some(pairwise_key),
                     ).await;
                     if res.is_ok() {
                         let _ = trust.trust_peer(peer.id.clone(), peer.name.clone()).await;
                         hist.add_entry(HistoryKind::Clipboard, format_clipboard_preview(&cleaned), "Pushed (E2EE)".to_string(), true).await;
+                        let _ = ui_btn.upgrade_in_event_loop(|ui| {
+                            ui.set_clipboard_pushed(true);
+                        });
+                        let ui_revert = ui_btn.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                            let _ = ui_revert.upgrade_in_event_loop(|ui| {
+                                ui.set_clipboard_pushed(false);
+                            });
+                        });
                     }
                 } else if let Some((w, h, data)) = clipboard::ClipboardManager::read_current_image_bytes() {
                     let target = SocketAddr::new(peer.ip, peer.tcp_port);
                     let res = TransferManager::send_clipboard_image(target, w, h, data, Some(dev_id)).await;
                     if res.is_ok() {
                         let _ = trust.trust_peer(peer.id.clone(), peer.name.clone()).await;
-                        hist.add_entry(HistoryKind::Clipboard, format!("🖼️ Image ({}x{} px)", w, h), "Pushed Screenshot".to_string(), true).await;
+                        hist.add_entry(HistoryKind::Clipboard, format!("Image ({}x{} px)", w, h), "Pushed Screenshot".to_string(), true).await;
+                        let _ = ui_btn.upgrade_in_event_loop(|ui| {
+                            ui.set_clipboard_pushed(true);
+                        });
+                        let ui_revert = ui_btn.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                            let _ = ui_revert.upgrade_in_event_loop(|ui| {
+                                ui.set_clipboard_pushed(false);
+                            });
+                        });
                     }
                 }
             }
@@ -451,20 +530,16 @@ async fn run_desktop(
         let count_tracker = active_send_cnt.clone();
 
         tokio::spawn(async move {
-            let files_opt = rfd::AsyncFileDialog::new()
-                .set_title("Select Files to Send via Otium Flow")
-                .pick_files()
-                .await;
+            let files_opt = pick_files_dialog("Select Files to Send via Otium Flow").await;
 
-            if let Some(file_handles) = files_opt {
-                if file_handles.is_empty() {
+            if let Some(paths) = files_opt {
+                if paths.is_empty() {
                     return;
                 }
 
                 cancel_tok.store(false, Ordering::SeqCst);
-                count_tracker.store(file_handles.len(), Ordering::SeqCst);
+                count_tracker.store(paths.len(), Ordering::SeqCst);
 
-                let paths: Vec<PathBuf> = file_handles.into_iter().map(|f| f.path().to_path_buf()).collect();
                 let peer = { p_arc.read().await.clone() };
 
                 if let Some(peer) = peer {
@@ -605,6 +680,7 @@ async fn run_desktop(
 }
 
 /// تشغيل واجهة الهاتف (مع مراعاة البردة وشريط الإيماءات)
+#[allow(clippy::too_many_arguments)]
 async fn run_mobile(
     discovery: Arc<DiscoveryManager>,
     active_peer: Arc<RwLock<Option<Peer>>>,
@@ -626,6 +702,40 @@ async fn run_mobile(
     let clipboard_mgr = Arc::new(clipboard::ClipboardManager::new());
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
     clipboard_mgr.start_monitoring(clip_tx);
+
+    // فحص التحديثات التلقائي الصامت من GitHub بدون تضارب حزم
+    let update_info: Arc<RwLock<Option<otium_flow::protocol::updater::AvailableUpdate>>> = Arc::new(RwLock::new(None));
+    let ui_up = app_weak.clone();
+    let update_store = update_info.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        if let Ok(Some(upd)) = otium_flow::protocol::updater::check_latest_release().await {
+            *update_store.write().await = Some(upd.clone());
+            let _ = ui_up.upgrade_in_event_loop(move |ui| {
+                ui.set_update_available(true);
+                ui.set_update_version(upd.version.into());
+            });
+        }
+    });
+
+    let ui_apply = app_weak.clone();
+    let update_apply_store = update_info.clone();
+    app.on_apply_update_clicked(move || {
+        let ui_c = ui_apply.clone();
+        let store = update_apply_store.clone();
+        tokio::spawn(async move {
+            let upd_opt = store.read().await.clone();
+            if let Some(upd) = upd_opt {
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_update_in_progress(true);
+                });
+                let _ = otium_flow::protocol::updater::apply_update_in_place(&upd).await;
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_update_in_progress(false);
+                });
+            }
+        });
+    });
 
     let ui_clip = app_weak.clone();
     let echo_guard = last_received_text.clone();
@@ -653,6 +763,7 @@ async fn run_mobile(
     let d_clone = discovery.clone();
     let p_clone = active_peer.clone();
     let ui_handle = app_weak.clone();
+    let my_id_mobile = persistent_device_id.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
@@ -668,22 +779,25 @@ async fn run_mobile(
 
             if let Some(peer) = selected {
                 *active = Some(peer.clone());
+                let sas = otium_flow::protocol::compute_sas_code(&my_id_mobile, &peer.id);
                 // تمييز الأجهزة المتشابهة في الاسم بإضافة جزء فريد من المعرف
                 let name = if peers.iter().filter(|p| p.name == peer.name).count() > 1 {
                     let suffix = if peer.id.len() >= 4 { &peer.id[..4] } else { &peer.id };
-                    format!("{} (#{}) • Connected", peer.name, suffix)
+                    format!("{} (#{})", peer.name, suffix)
                 } else {
-                    format!("{} • Connected", peer.name)
+                    peer.name.clone()
                 };
                 let _ = ui_handle.upgrade_in_event_loop(move |ui| {
                     ui.set_is_connected(true);
                     ui.set_peer_name(name.into());
+                    ui.set_sas_code(sas.into());
                 });
             } else {
                 *active = None;
                 let _ = ui_handle.upgrade_in_event_loop(|ui| {
                     ui.set_is_connected(false);
                     ui.set_peer_name("Scanning Wi-Fi...".into());
+                    ui.set_sas_code("".into());
                 });
             }
         }
@@ -724,13 +838,7 @@ async fn run_mobile(
                     });
                 }
                 TransferEvent::ClipboardImageReceived { width, height, data } => {
-                    let _ = arboard::Clipboard::new().and_then(|mut cb| {
-                        cb.set_image(arboard::ImageData {
-                            width,
-                            height,
-                            bytes: std::borrow::Cow::Borrowed(&data),
-                        })
-                    });
+                    let _ = clipboard::ClipboardManager::set_image(width, height, &data);
 
                     let hist = hist_receive.clone();
                     tokio::spawn(async move {
@@ -760,9 +868,7 @@ async fn run_mobile(
                 }
                 TransferEvent::FileProgress { name: _, current_bytes, total_bytes, speed_mb_s, eta_secs } => {
                     let progress = current_bytes as f32 / total_bytes as f32;
-                    let mb_done = current_bytes as f64 / (1024.0 * 1024.0);
-                    let mb_total = total_bytes as f64 / (1024.0 * 1024.0);
-                    let status = format!("{:.1}/{:.1} MB • {:.1} MB/s ({}s)", mb_done, mb_total, speed_mb_s, eta_secs);
+                    let status = otium_flow::protocol::format_transfer_status(current_bytes, total_bytes, speed_mb_s, eta_secs);
 
                     let _ = ui_handle2.upgrade_in_event_loop(move |ui| {
                         ui.set_transfer_progress(progress);
@@ -808,12 +914,20 @@ async fn run_mobile(
     });
 
     let full_clip_copy = full_clipboard_text.clone();
+    let ui_copy_mobile = app_weak.clone();
     app.on_copy_received_clicked(move || {
         let text_arc = full_clip_copy.clone();
+        let ui_c = ui_copy_mobile.clone();
         tokio::spawn(async move {
             let text = text_arc.read().await.clone();
-            if !text.is_empty() {
-                let _ = clipboard::ClipboardManager::set_text(&text);
+            if !text.is_empty() && clipboard::ClipboardManager::set_text(&text).is_ok() {
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_clipboard_copied(true);
+                });
+                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                let _ = ui_c.upgrade_in_event_loop(|ui| {
+                    ui.set_clipboard_copied(false);
+                });
             }
         });
     });
@@ -823,12 +937,14 @@ async fn run_mobile(
     let hist_push = history.clone();
     let trust_clip = trust_manager.clone();
     let dev_id_clip = persistent_device_id.clone();
+    let ui_push_mobile = app_weak.clone();
     app.on_push_clipboard_clicked(move || {
         let p_arc = p_send.clone();
         let clip_arc = full_clip_push.clone();
         let hist = hist_push.clone();
         let trust = trust_clip.clone();
         let dev_id = dev_id_clip.clone();
+        let ui_btn = ui_push_mobile.clone();
         tokio::spawn(async move {
             let peer = { p_arc.read().await.clone() };
             if let Some(peer) = peer {
@@ -844,24 +960,44 @@ async fn run_mobile(
                 if !current.is_empty() {
                     let (cleaned, _) = clean_text(&current);
                     let target = SocketAddr::new(peer.ip, peer.tcp_port);
-                    let master_key = trust.get_master_key().await;
+                    let pairwise_key = trust.get_key_for_peer(&peer.id).await;
                     // إرسال الحافظة بتشفير عسكري ChaCha20-Poly1305 E2EE مع مفتاح معتمد وتوثيق هوية
                     let res = TransferManager::send_encrypted_clipboard_with_auth(
                         target,
                         cleaned.clone(),
                         Some(dev_id),
-                        Some(master_key),
+                        Some(pairwise_key),
                     ).await;
                     if res.is_ok() {
                         let _ = trust.trust_peer(peer.id.clone(), peer.name.clone()).await;
                         hist.add_entry(HistoryKind::Clipboard, format_clipboard_preview(&cleaned), "Pushed (E2EE)".to_string(), true).await;
+                        let _ = ui_btn.upgrade_in_event_loop(|ui| {
+                            ui.set_clipboard_pushed(true);
+                        });
+                        let ui_revert = ui_btn.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                            let _ = ui_revert.upgrade_in_event_loop(|ui| {
+                                ui.set_clipboard_pushed(false);
+                            });
+                        });
                     }
                 } else if let Some((w, h, data)) = clipboard::ClipboardManager::read_current_image_bytes() {
                     let target = SocketAddr::new(peer.ip, peer.tcp_port);
                     let res = TransferManager::send_clipboard_image(target, w, h, data, Some(dev_id)).await;
                     if res.is_ok() {
                         let _ = trust.trust_peer(peer.id.clone(), peer.name.clone()).await;
-                        hist.add_entry(HistoryKind::Clipboard, format!("🖼️ Image ({}x{} px)", w, h), "Pushed Screenshot".to_string(), true).await;
+                        hist.add_entry(HistoryKind::Clipboard, format!("Image ({}x{} px)", w, h), "Pushed Screenshot".to_string(), true).await;
+                        let _ = ui_btn.upgrade_in_event_loop(|ui| {
+                            ui.set_clipboard_pushed(true);
+                        });
+                        let ui_revert = ui_btn.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                            let _ = ui_revert.upgrade_in_event_loop(|ui| {
+                                ui.set_clipboard_pushed(false);
+                            });
+                        });
                     }
                 }
             }
@@ -885,20 +1021,16 @@ async fn run_mobile(
         let count_tracker = active_send_cnt.clone();
 
         tokio::spawn(async move {
-            let files_opt = rfd::AsyncFileDialog::new()
-                .set_title("Select Files or Photos to Send to PC")
-                .pick_files()
-                .await;
+            let files_opt = pick_files_dialog("Select Files or Photos to Send to PC").await;
 
-            if let Some(file_handles) = files_opt {
-                if file_handles.is_empty() {
+            if let Some(paths) = files_opt {
+                if paths.is_empty() {
                     return;
                 }
 
                 cancel_tok.store(false, Ordering::SeqCst);
-                count_tracker.store(file_handles.len(), Ordering::SeqCst);
+                count_tracker.store(paths.len(), Ordering::SeqCst);
 
-                let paths: Vec<PathBuf> = file_handles.into_iter().map(|f| f.path().to_path_buf()).collect();
                 let peer = { p_arc.read().await.clone() };
 
                 if let Some(peer) = peer {

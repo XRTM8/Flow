@@ -100,6 +100,12 @@ impl HistoryManager {
     }
 }
 
+impl Default for HistoryManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

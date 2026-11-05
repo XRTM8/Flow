@@ -194,7 +194,7 @@ async fn test_interrupted_transfer_cleans_flowpart() {
     let header_bytes = serde_json::to_vec(&offer).unwrap();
     client.write_u32(header_bytes.len() as u32).await.unwrap();
     client.write_all(&header_bytes).await.unwrap();
-    client.write_all(&vec![0xAA; 100]).await.unwrap();
+    client.write_all(&[0xAA; 100]).await.unwrap();
     client.flush().await.unwrap();
 
     // قطع الاتصال عمداً بمحاكاة انقطاع شبكة الـ Wi-Fi
@@ -898,7 +898,7 @@ async fn test_resumable_transfer_midway_recovery() {
     tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
     // استهلاك حدث الخطأ الناتج عن قطع الاتصال
-    while let Ok(_) = rx.try_recv() {}
+    while rx.try_recv().is_ok() {}
 
     // التأكد من بقاء ملف .flowpart حياً على القرص لاستئنافه
     let part_path = test_dir.join(format!("{}.{}.flowpart", filename, test_file_id));
@@ -1058,4 +1058,52 @@ async fn test_sas_pairing_code_visual_verification() {
     let third_peer = "FLOW-MACBOOK-7Z01";
     let code_different = compute_sas_code(peer_pc, third_peer);
     assert_ne!(code_pc_side, code_different);
+}
+
+#[tokio::test]
+async fn test_pairwise_e2ee_mutual_device_authentication() {
+    use otium_flow::protocol::trust::{derive_pairwise_key, TrustManager};
+
+    let alice_id = "device-alice-desktop-uuid-1111";
+    let bob_id = "device-bob-mobile-uuid-2222";
+
+    let test_dir = std::env::temp_dir().join(format!("flow_pairwise_test_{}", uuid::Uuid::new_v4()));
+    let test_port = 56149;
+    let (tx, mut rx) = mpsc::unbounded_channel::<TransferEvent>();
+
+    // Bob creates a TrustManager configured with his own self_id
+    let bob_trust = Arc::new(TrustManager::with_self_id(test_dir.clone(), bob_id.to_string()));
+    let manager = Arc::new(TransferManager::with_trust(test_port, test_dir.clone(), bob_trust));
+    manager.clone().start_receiver(tx).await.unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Alice derives pairwise key for (alice, bob)
+    let alice_derived_key = derive_pairwise_key(alice_id, bob_id);
+
+    let target: SocketAddr = format!("127.0.0.1:{}", test_port).parse().unwrap();
+    let secret = "Top Secret Zero-Knowledge P2P Message".to_string();
+
+    // Alice transmits encrypted payload with her sender_id
+    TransferManager::send_encrypted_clipboard_with_auth(
+        target,
+        secret.clone(),
+        Some(alice_id.to_string()),
+        Some(alice_derived_key),
+    )
+    .await
+    .unwrap();
+
+    // Bob should receive and decrypt using his pairwise key
+    let mut received = false;
+    while let Some(event) = rx.recv().await {
+        if let TransferEvent::ClipboardReceived(text) = event {
+            assert_eq!(text, secret);
+            received = true;
+            break;
+        }
+    }
+
+    assert!(received, "Bob should successfully decrypt Alice's pairwise encrypted payload");
+    let _ = std::fs::remove_dir_all(&test_dir);
 }

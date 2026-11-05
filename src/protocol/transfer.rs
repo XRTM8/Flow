@@ -21,8 +21,9 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(15); // مهلة أمان 
 
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CLOCK$", "CONIN$", "CONOUT$",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +92,41 @@ pub enum TransferEvent {
     },
     FileComplete { name: String, path: PathBuf },
     Error(String),
+}
+
+/// تنسيق الحجم بطريقة أنيقة تتكيف تلقائياً مع حجم الملف (Bytes, KB, MB, GB)
+pub fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// تنسيق حالة النقل اللحظية مع عداد السرعة والوقت المتبقي بدقة
+pub fn format_transfer_status(current_bytes: u64, total_bytes: u64, speed_mb_s: f64, eta_secs: u64) -> String {
+    let cur_str = format_bytes(current_bytes);
+    let tot_str = format_bytes(total_bytes);
+    if total_bytes == 0 {
+        return "Complete".to_string();
+    }
+    if eta_secs > 0 && speed_mb_s > 0.05 {
+        if eta_secs >= 60 {
+            let mins = eta_secs / 60;
+            let secs = eta_secs % 60;
+            format!("{}/{}  {:.1} MB/s ({}m{}s)", cur_str, tot_str, speed_mb_s, mins, secs)
+        } else {
+            format!("{}/{}  {:.1} MB/s ({}s)", cur_str, tot_str, speed_mb_s, eta_secs)
+        }
+    } else if speed_mb_s > 0.05 {
+        format!("{}/{}  {:.1} MB/s", cur_str, tot_str, speed_mb_s)
+    } else {
+        format!("{}/{}", cur_str, tot_str)
+    }
 }
 
 /// استعلام مباشر من نظام التشغيل عن السعة التخزينية المتاحة قبل قبول أي ملف
@@ -218,6 +254,7 @@ impl TransferManager {
             loop {
                 match listener.accept().await {
                     Ok((stream, _addr)) => {
+                        let _ = stream.set_nodelay(true);
                         let manager = self.clone();
                         let sender = event_sender.clone();
                         let permit = match manager.connection_limiter.clone().try_acquire_owned() {
@@ -352,7 +389,7 @@ impl TransferManager {
             PacketHeader::ResumeResponse { .. } => {
                 return Ok(());
             }
-            PacketHeader::EncryptedPayload { nonce, ciphertext, timestamp_secs, .. } => {
+            PacketHeader::EncryptedPayload { nonce, ciphertext, timestamp_secs, sender_id } => {
                 // حماية ضد هجمات إعادة الإرسال (Anti-Replay Attack Protection) بمهلة 120 ثانية
                 if timestamp_secs > 0 {
                     let now = std::time::SystemTime::now()
@@ -364,14 +401,34 @@ impl TransferManager {
                     }
                 }
 
-                let key = if let Some(ref tm) = self.trust_manager {
-                    tm.get_master_key().await
-                } else {
-                    [0x42u8; 32]
-                };
-                let cipher = ChaCha20Poly1305::new(&key.into());
                 let nonce_ref = Nonce::from(nonce);
-                if let Ok(decrypted) = cipher.decrypt(&nonce_ref, ciphertext.as_ref()) {
+                let mut decrypted_opt = None;
+
+                // 1. محاولة فك التشفير بمفتاح النظير الثنائي (Pairwise E2EE Key) إذا توفر sender_id
+                if let Some(ref sid) = sender_id {
+                    if let Some(ref tm) = self.trust_manager {
+                        let pairwise_key = tm.get_key_for_peer(sid).await;
+                        let cipher = ChaCha20Poly1305::new(&pairwise_key.into());
+                        if let Ok(dec) = cipher.decrypt(&nonce_ref, ciphertext.as_ref()) {
+                            decrypted_opt = Some(dec);
+                        }
+                    }
+                }
+
+                // 2. المحاولة البديلة عبر Master Key أو المفتاح المرجعي
+                if decrypted_opt.is_none() {
+                    let key = if let Some(ref tm) = self.trust_manager {
+                        tm.get_master_key().await
+                    } else {
+                        [0x42u8; 32]
+                    };
+                    let cipher = ChaCha20Poly1305::new(&key.into());
+                    if let Ok(dec) = cipher.decrypt(&nonce_ref, ciphertext.as_ref()) {
+                        decrypted_opt = Some(dec);
+                    }
+                }
+
+                if let Some(decrypted) = decrypted_opt {
                     if let Ok(text) = String::from_utf8(decrypted) {
                         let _ = sender.send(TransferEvent::ClipboardReceived(text));
                     }
@@ -501,6 +558,7 @@ impl TransferManager {
 
                 let mut file = tokio::fs::OpenOptions::new()
                     .create(true)
+                    .truncate(false)
                     .write(true)
                     .read(true)
                     .open(&part_path)
@@ -666,6 +724,7 @@ impl TransferManager {
         sender_id: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut stream = TcpStream::connect(target).await?;
+        let _ = stream.set_nodelay(true);
         let header = PacketHeader::ClipboardText { content: text, sender_id };
         let header_bytes = serde_json::to_vec(&header)?;
 
@@ -690,6 +749,7 @@ impl TransferManager {
         sender_id: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut stream = TcpStream::connect(target).await?;
+        let _ = stream.set_nodelay(true);
         let header = PacketHeader::ClipboardImage {
             width,
             height,
@@ -742,6 +802,7 @@ impl TransferManager {
             .as_secs();
 
         let mut stream = TcpStream::connect(target).await?;
+        let _ = stream.set_nodelay(true);
         let header = PacketHeader::EncryptedPayload {
             nonce,
             ciphertext,
@@ -809,7 +870,7 @@ impl TransferManager {
         let file_id = {
             let mut h = Sha256::new();
             h.update(filename.as_bytes());
-            h.update(&total_size.to_le_bytes());
+            h.update(total_size.to_le_bytes());
             let hash = h.finalize();
             hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>()
         };
@@ -819,6 +880,7 @@ impl TransferManager {
         // إذا كان الملف أكبر من 5 ميجابايت، نستعلم أولاً هل لدى المستقبل جزء محمل مسبقاً لاستئنافه
         if total_size > 5 * 1024 * 1024 {
             if let Ok(mut query_stream) = TcpStream::connect(target).await {
+                let _ = query_stream.set_nodelay(true);
                 let query = PacketHeader::ResumeQuery {
                     file_id: file_id.clone(),
                     name: filename.clone(),
@@ -886,6 +948,7 @@ impl TransferManager {
         };
 
         let mut stream = TcpStream::connect(target).await?;
+        let _ = stream.set_nodelay(true);
         let header = PacketHeader::FileOffer {
             name: filename,
             size: total_size,
