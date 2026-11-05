@@ -309,9 +309,13 @@ async fn run_desktop(
     let full_clip_recv = full_clipboard_text.clone();
     let hist_receive = history.clone();
     let active_count_recv = active_transfers_count.clone();
+    let disc_events = discovery.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
+                TransferEvent::PeerDiscovered(peer) => {
+                    disc_events.peers.write().await.insert(peer.id.clone(), peer);
+                }
                 TransferEvent::ClipboardReceived(text) => {
                     let (cleaned, was_cleaned) = clean_text(&text);
                     *echo_receive.write().await = cleaned.clone();

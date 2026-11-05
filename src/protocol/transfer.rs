@@ -28,6 +28,12 @@ const WINDOWS_RESERVED_NAMES: &[&str] = &[
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PacketHeader {
+    PingAnnounce {
+        id: String,
+        name: String,
+        device_type: super::discovery::DeviceType,
+        tcp_port: u16,
+    },
     ClipboardText {
         content: String,
         #[serde(default)]
@@ -76,6 +82,7 @@ pub enum PacketHeader {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum TransferEvent {
+    PeerDiscovered(super::discovery::Peer),
     ClipboardReceived(String),
     ClipboardImageReceived {
         width: usize,
@@ -285,6 +292,7 @@ impl TransferManager {
         mut stream: TcpStream,
         sender: mpsc::UnboundedSender<TransferEvent>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let peer_addr = stream.peer_addr()?;
         // 1. قراءة طول الهيدر مع فحص أمني ضد هجمات DoS مع مهلة شبكية
         let header_len = tokio::time::timeout(NETWORK_TIMEOUT, stream.read_u32())
             .await
@@ -340,6 +348,7 @@ impl TransferManager {
                             false
                         }
                     }
+                    PacketHeader::PingAnnounce { .. } => true,
                     PacketHeader::ResumeResponse { .. } => true,
                 };
 
@@ -351,6 +360,19 @@ impl TransferManager {
         }
 
         match header {
+            PacketHeader::PingAnnounce { id, name, device_type, tcp_port } => {
+                let peer_ip = peer_addr.ip();
+                let peer = super::discovery::Peer {
+                    id,
+                    name,
+                    device_type,
+                    ip: peer_ip,
+                    tcp_port,
+                    last_seen: Instant::now(),
+                };
+                let _ = sender.send(TransferEvent::PeerDiscovered(peer));
+                return Ok(());
+            }
             PacketHeader::ClipboardText { content, .. } => {
                 let _ = sender.send(TransferEvent::ClipboardReceived(content));
             }
@@ -767,6 +789,29 @@ impl TransferManager {
         tokio::time::timeout(NETWORK_TIMEOUT, stream.flush())
             .await
             .map_err(|_| "Network Timeout: Failed to flush image stream")??;
+        Ok(())
+    }
+
+    /// إرسال إعلان اكتشاف مباشر عبر TCP لتجاوز حظر البث اللاسلكي في موجهات وبطاقات هواتف أندرويد
+    pub async fn send_tcp_ping(
+        target: SocketAddr,
+        self_id: String,
+        self_name: String,
+        self_type: super::discovery::DeviceType,
+        self_port: u16,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut stream = tokio::time::timeout(Duration::from_millis(1500), TcpStream::connect(target)).await??;
+        let _ = stream.set_nodelay(true);
+        let header = PacketHeader::PingAnnounce {
+            id: self_id,
+            name: self_name,
+            device_type: self_type,
+            tcp_port: self_port,
+        };
+        let bytes = serde_json::to_vec(&header)?;
+        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(bytes.len() as u32)).await??;
+        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&bytes)).await??;
+        tokio::time::timeout(NETWORK_TIMEOUT, stream.flush()).await??;
         Ok(())
     }
 

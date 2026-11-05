@@ -117,9 +117,13 @@ fn get_mobile_download_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     {
         let pub_dir = PathBuf::from("/storage/emulated/0/Download/OtiumFlow");
+        let _ = std::fs::create_dir_all(&pub_dir);
+        let sample = pub_dir.join("Flow_Transfer_Ready.txt");
+        if !sample.exists() {
+            let _ = std::fs::write(&sample, "FLOW by Otium - Pure Native Rust P2P Sync. Ready to stream.");
+        }
         if let Some(parent) = pub_dir.parent() {
             if parent.exists() {
-                let _ = std::fs::create_dir_all(&pub_dir);
                 return pub_dir;
             }
         }
@@ -132,6 +136,10 @@ fn get_mobile_download_dir() -> PathBuf {
         if let Ok(profile) = std::env::var("USERPROFILE") {
             let p = PathBuf::from(profile).join("Downloads").join("OtiumFlow");
             let _ = std::fs::create_dir_all(&p);
+            let sample = p.join("Flow_Transfer_Ready.txt");
+            if !sample.exists() {
+                let _ = std::fs::write(&sample, "FLOW by Otium - Ready to stream.");
+            }
             return p;
         }
         let p = PathBuf::from("downloads");
@@ -300,9 +308,13 @@ pub fn start_mobile_engine() -> Result<(), Box<dyn std::error::Error>> {
     let full_clip_recv = full_clipboard_text.clone();
     let hist_receive = history.clone();
     let active_count_recv = active_transfers_count.clone();
+    let disc_events = discovery.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
+                TransferEvent::PeerDiscovered(peer) => {
+                    disc_events.peers.write().await.insert(peer.id.clone(), peer);
+                }
                 TransferEvent::ClipboardReceived(text) => {
                     let (cleaned, was_cleaned) = clean_text(&text);
                     *echo_receive.write().await = cleaned.clone();
@@ -523,6 +535,69 @@ pub fn start_mobile_engine() -> Result<(), Box<dyn std::error::Error>> {
     app.on_close_file_picker(move || {
         let _ = ui_close_picker.upgrade_in_event_loop(|ui| {
             ui.set_show_file_picker(false);
+        });
+    });
+
+    // إنشاء ملف تجريبي وإرساله فوراً للحاسوب
+    let ui_test_file = app_weak.clone();
+    let p_test = active_peer.clone();
+    let trust_test = trust_manager.clone();
+    let dev_id_test = persistent_device_id.clone();
+    let hist_test = history.clone();
+    app.on_create_test_file(move || {
+        let ui_handle = ui_test_file.clone();
+        let p_arc = p_test.clone();
+        let trust = trust_test.clone();
+        let dev_id = dev_id_test.clone();
+        let hist = hist_test.clone();
+
+        tokio::spawn(async move {
+            let download_dir = get_mobile_download_dir();
+            let test_file = download_dir.join("OtiumFlow_Instant_Test.txt");
+            let _ = std::fs::write(&test_file, format!("FLOW by Otium high-speed P2P Wi-Fi transfer test at {:?}", std::time::SystemTime::now()));
+
+            let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                ui.set_show_file_picker(false);
+            });
+
+            let peer = { p_arc.read().await.clone() };
+            if let Some(peer) = peer {
+                let target = SocketAddr::new(peer.ip, peer.tcp_port);
+                let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                    ui.set_transfer_active(true);
+                    ui.set_transfer_progress(0.0);
+                    ui.set_transfer_status("Sending test file...".into());
+                });
+
+                let paths = vec![test_file.clone()];
+                let ui_prog = ui_handle.clone();
+                let send_res = TransferManager::send_multiple_files_cancellable(
+                    target,
+                    &paths,
+                    Some(dev_id),
+                    None,
+                    move |idx, total_count, sent, total, speed, eta| {
+                        let prog = sent as f32 / total.max(1) as f32;
+                        let status = format!("[{}/{}] Sent • {:.1} MB/s", idx, total_count, speed);
+                        let _ = ui_prog.upgrade_in_event_loop(move |ui| {
+                            ui.set_transfer_progress(prog);
+                            ui.set_transfer_status(status.into());
+                        });
+                    },
+                ).await;
+
+                if send_res.is_ok() {
+                    let _ = trust.trust_peer(peer.id.clone(), peer.name.clone()).await;
+                    hist.add_entry(HistoryKind::File, "OtiumFlow_Instant_Test.txt".into(), "Sent Test File".into(), true).await;
+                    let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                        ui.set_transfer_status("Test File Sent Successfully!".into());
+                    });
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                        ui.set_transfer_active(false);
+                    });
+                }
+            }
         });
     });
 

@@ -69,6 +69,8 @@ impl DiscoveryManager {
     pub async fn start(self: Arc<Self>) -> Result<(), std::io::Error> {
         let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
         sock.set_reuse_address(true)?;
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        let _ = sock.set_reuse_port(true);
         sock.set_broadcast(true)?;
         sock.set_nonblocking(true)?;
 
@@ -98,7 +100,7 @@ impl DiscoveryManager {
                                     peers.insert(
                                         beacon.id.clone(),
                                         Peer {
-                                            id: beacon.id,
+                                            id: beacon.id.clone(),
                                             name: safe_name,
                                             device_type: beacon.device_type,
                                             ip: src.ip(),
@@ -106,6 +108,34 @@ impl DiscoveryManager {
                                             last_seen: Instant::now(),
                                         },
                                     );
+
+                                    // 1. إرسال رد Unicast فوري ومباشر على IP الهاتف لتخطي حظر الـ Broadcast
+                                    let reply = BeaconMessage {
+                                        id: listener_self.self_id.clone(),
+                                        name: listener_self.self_name.clone(),
+                                        device_type: listener_self.self_type,
+                                        tcp_port: listener_self.tcp_port,
+                                    };
+                                    if let Ok(bytes) = serde_json::to_vec(&reply) {
+                                        let target = SocketAddr::new(src.ip(), DISCOVERY_PORT);
+                                        let _ = listener_socket.send_to(&bytes, target).await;
+                                    }
+
+                                    // 2. إرسال TCP Discovery Ping مضمون لتخطي حظر موجهات الـ Wi-Fi
+                                    let target_tcp = SocketAddr::new(src.ip(), beacon.tcp_port);
+                                    let s_id = listener_self.self_id.clone();
+                                    let s_name = listener_self.self_name.clone();
+                                    let s_type = listener_self.self_type;
+                                    let s_port = listener_self.tcp_port;
+                                    tokio::spawn(async move {
+                                        let _ = super::transfer::TransferManager::send_tcp_ping(
+                                            target_tcp,
+                                            s_id,
+                                            s_name,
+                                            s_type,
+                                            s_port,
+                                        ).await;
+                                    });
                                 }
                             }
                         }
@@ -145,6 +175,15 @@ impl DiscoveryManager {
             loop {
                 for addr in &broadcast_addrs {
                     let _ = sender_socket.send_to(&payload, *addr).await;
+                }
+
+                // إرسال Unicast دوري لجميع الأجهزة النشطة لضمان ثبات الاتصال على أندرويد
+                let known_ips: Vec<SocketAddr> = {
+                    let p = sender_self.peers.read().await;
+                    p.values().map(|peer| SocketAddr::new(peer.ip, DISCOVERY_PORT)).collect()
+                };
+                for target_ip in known_ips {
+                    let _ = sender_socket.send_to(&payload, target_ip).await;
                 }
 
                 // إضافة تأخير عشوائي خفيف (Jitter 0-400ms) لمنع عواصف البث وتصادم الحزم وتوفير بطارية الهواتف

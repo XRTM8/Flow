@@ -1,6 +1,6 @@
 [package]
 name = "otium-flow"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2021"
 default-run = "otium-flow-app"
 
@@ -39,9 +39,13 @@ winres = "0.1"
 [package.metadata.android]
 package = "org.otium.flow"
 label = "FLOW by Otium"
-res = "android/res"
 icon = "@mipmap/ic_launcher"
+resources = "res"
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+
+[package.metadata.android.application]
+label = "FLOW by Otium"
+icon = "@mipmap/ic_launcher"
 
 [package.metadata.android.signing.release]
 path = "flow.keystore"

@@ -41,6 +41,7 @@ export component MobileApp inherits Window {
     callback apply_update_clicked();
     callback file_selected(string);
     callback close_file_picker();
+    callback create_test_file();
 
     VerticalLayout {
         // نطبق مسافة الأمان العلوية (البردة) والسفلية تلقائياً
@@ -434,6 +435,7 @@ export component MobileApp inherits Window {
         background: #0b0d13fa;
         x: 0;
         y: 0;
+        z: 100;
 
         VerticalLayout {
             padding-top: root.safe_area_top + 12px;
@@ -478,7 +480,7 @@ export component MobileApp inherits Window {
             if root.picker_files.length == 0 : VerticalLayout {
                 alignment: center;
                 vertical-stretch: 1;
-                spacing: 8px;
+                spacing: 12px;
                 Text {
                     text: "No files found in Downloads or Pictures";
                     font-size: 13px;
@@ -490,6 +492,26 @@ export component MobileApp inherits Window {
                     font-size: 11px;
                     color: Theme.text-faint;
                     horizontal-alignment: center;
+                }
+                Rectangle {
+                    width: 210px;
+                    height: 40px;
+                    border-radius: 8px;
+                    background: Theme.accent;
+                    x: (parent.width - self.width) / 2;
+                    test-btn-touch := TouchArea {
+                        clicked => { root.create_test_file(); }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Create & Send Test File";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
 
@@ -572,6 +594,7 @@ export component MobileApp inherits Window {
         background: #0b0d13fa;
         x: 0;
         y: 0;
+        z: 100;
 
         VerticalLayout {
             padding-top: root.safe_area_top + 12px;
