@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { HistoryItem } from "models.slint";
+import { HistoryItem, FilePickerItem } from "models.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export component MobileApp inherits Window {
@@ -7,9 +7,9 @@ export component MobileApp inherits Window {
     background: Theme.background;
     default-font-family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
-    // المتغيرات الخاصة بالهاتف مع مراعاة "مكان البردة" وشريط الإيماءات السفلي
-    in-out property <length> safe_area_top: 48px;    // حماية منطقة البردة / النوتش وشريط الحالة
-    in-out property <length> safe_area_bottom: 34px; // حماية شريط الإيماءات وزر الرجوع السفلي
+    // المتغيرات الخاصة بالهاتف مع مراعاة منطقة البردة وشريط الإيماءات السفلي
+    in-out property <length> safe_area_top: 48px;
+    in-out property <length> safe_area_bottom: 34px;
 
     in-out property <string> peer_name: "Scanning Wi-Fi...";
     in-out property <bool> is_connected: false;
@@ -28,6 +28,10 @@ export component MobileApp inherits Window {
     in-out property <string> update_version: "";
     in-out property <bool> update_in_progress: false;
 
+    // استعراض واختيار الملفات داخل التطبيق للهاتف
+    in-out property <bool> show_file_picker: false;
+    in-out property <[FilePickerItem]> picker_files: [];
+
     callback share_file_clicked();
     callback push_clipboard_clicked();
     callback copy_received_clicked();
@@ -35,6 +39,8 @@ export component MobileApp inherits Window {
     callback clear_history();
     callback cancel_transfer_clicked();
     callback apply_update_clicked();
+    callback file_selected(string);
+    callback close_file_picker();
 
     VerticalLayout {
         // نطبق مسافة الأمان العلوية (البردة) والسفلية تلقائياً
@@ -61,7 +67,7 @@ export component MobileApp inherits Window {
                     }
                     Text {
                         text: "by Otium";
-                        font-size: 12px;
+                        font-size: 11px;
                         color: Theme.text-muted;
                         vertical-alignment: center;
                     }
@@ -87,7 +93,7 @@ export component MobileApp inherits Window {
                         padding-right: 10px;
                         alignment: center;
                         Text {
-                            text: root.update_in_progress ? "Updating..." : "↑ " + root.update_version;
+                            text: root.update_in_progress ? "Updating..." : "Up " + root.update_version;
                             font-size: 11px;
                             font-weight: 600;
                             color: #60a5fa;
@@ -149,7 +155,7 @@ export component MobileApp inherits Window {
                     }
                 }
 
-                // زر فتح سجل النشاط في الهاتف
+                // زر فتح سجل النشاط في الهاتف (أيقونة متجهات نقية بدون خطوط خارجية)
                 Rectangle {
                     width: 32px;
                     height: 28px;
@@ -164,13 +170,16 @@ export component MobileApp inherits Window {
                         clicked => { root.toggle_history(); }
                     }
 
-                    Text {
-                        text: "☰";
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: root.show_history ? Theme.accent : Theme.text-secondary;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        width: 14px;
+                        height: 11px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
+                        Rectangle { width: 14px; height: 1.5px; border-radius: 1px; background: root.show_history ? Theme.accent : Theme.text-secondary; }
+                        Rectangle { width: 14px; height: 1.5px; border-radius: 1px; background: root.show_history ? Theme.accent : Theme.text-secondary; }
+                        Rectangle { width: 14px; height: 1.5px; border-radius: 1px; background: root.show_history ? Theme.accent : Theme.text-secondary; }
                     }
                 }
             }
@@ -182,7 +191,7 @@ export component MobileApp inherits Window {
             border-width: 1px;
             border-color: Theme.border;
             border-radius: Theme.radius-md;
-            height: 72px;
+            height: 64px;
 
             VerticalLayout {
                 padding: 12px;
@@ -192,11 +201,11 @@ export component MobileApp inherits Window {
                     alignment: space-between;
                     Text {
                         text: root.transfer_name;
-                        font-size: 13px;
+                        font-size: 12px;
                         font-weight: 600;
                         color: Theme.text-primary;
                         overflow: elide;
-                        width: 160px;
+                        width: 180px;
                     }
 
                     HorizontalLayout {
@@ -230,8 +239,8 @@ export component MobileApp inherits Window {
                                 clicked => { root.cancel_transfer_clicked(); }
                             }
                             Text {
-                                text: "✕";
-                                font-size: 12px;
+                                text: "x";
+                                font-size: 13px;
                                 font-weight: 700;
                                 color: Theme.status-error;
                                 x: (parent.width - self.width) / 2;
@@ -349,7 +358,7 @@ export component MobileApp inherits Window {
                             alignment: center;
                             spacing: 6px;
                             Text {
-                                text: root.clipboard_copied ? "✓ Copied" : "Copy to Clipboard";
+                                text: root.clipboard_copied ? "Copied to Clipboard" : "Copy to Clipboard";
                                 font-size: 13px;
                                 font-weight: 500;
                                 color: root.clipboard_copied ? Theme.accent : Theme.text-primary;
@@ -380,13 +389,6 @@ export component MobileApp inherits Window {
                     alignment: center;
                     spacing: 8px;
                     Text {
-                        text: "↑";
-                        font-size: 18px;
-                        font-weight: 700;
-                        color: #ffffff;
-                        vertical-alignment: center;
-                    }
-                    Text {
                         text: "Send File or Photo";
                         font-size: 15px;
                         font-weight: 600;
@@ -414,7 +416,7 @@ export component MobileApp inherits Window {
                     alignment: center;
                     spacing: 6px;
                     Text {
-                        text: root.clipboard_pushed ? "✓ Sent to PC" : "Push Clipboard to PC";
+                        text: root.clipboard_pushed ? "Sent to PC" : "Push Clipboard to PC";
                         font-size: 13px;
                         font-weight: 500;
                         color: root.clipboard_pushed ? Theme.accent : Theme.text-secondary;
@@ -425,7 +427,145 @@ export component MobileApp inherits Window {
         }
     }
 
-    // 5. واجهة سجل التحويلات المنبثقة للهاتف (مع مراعاة مساحة البردة وشريط الإيماءات)
+    // 5. نافذة اختيار الملفات داخل التطبيق للهاتف (In-App File Picker Sheet)
+    if root.show_file_picker : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #0b0d13fa;
+        x: 0;
+        y: 0;
+
+        VerticalLayout {
+            padding-top: root.safe_area_top + 12px;
+            padding-bottom: root.safe_area_bottom + 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 14px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "SELECT FILE TO SEND";
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    letter-spacing: 1px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 32px;
+                    height: 30px;
+                    border-radius: 15px;
+                    background: close-fp-touch.pressed ? Theme.surface-pressed : close-fp-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    animate background { duration: 120ms; }
+                    close-fp-touch := TouchArea {
+                        clicked => { root.close_file_picker(); }
+                    }
+                    Text {
+                        text: "x";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            if root.picker_files.length == 0 : VerticalLayout {
+                alignment: center;
+                vertical-stretch: 1;
+                spacing: 8px;
+                Text {
+                    text: "No files found in Downloads or Pictures";
+                    font-size: 13px;
+                    color: Theme.text-muted;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Place files in /Download to share instantly";
+                    font-size: 11px;
+                    color: Theme.text-faint;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if root.picker_files.length > 0 : ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 8px;
+                    for f in root.picker_files : Rectangle {
+                        background: f-touch.pressed ? #10b98122 : f-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                        border-width: 1px;
+                        border-color: f-touch.has-hover ? Theme.accent : Theme.border;
+                        border-radius: Theme.radius-sm;
+                        height: 52px;
+                        animate background { duration: 100ms; }
+
+                        f-touch := TouchArea {
+                            clicked => { root.file_selected(f.path); }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 12px;
+                            alignment: center;
+
+                            Rectangle {
+                                width: 32px;
+                                height: 32px;
+                                border-radius: 8px;
+                                background: #10b98118;
+                                border-width: 1px;
+                                border-color: #10b98133;
+                                y: (parent.height - self.height) / 2;
+                                Text {
+                                    text: "F";
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: Theme.accent;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 2px;
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                Text {
+                                    text: f.name;
+                                    font-size: 13px;
+                                    font-weight: 500;
+                                    color: Theme.text-primary;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: f.size_str;
+                                    font-size: 10px;
+                                    color: Theme.text-muted;
+                                }
+                            }
+
+                            Text {
+                                text: "Send";
+                                font-size: 12px;
+                                font-weight: 600;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. واجهة سجل التحويلات المنبثقة للهاتف
     if root.show_history : Rectangle {
         width: parent.width;
         height: parent.height;
@@ -448,27 +588,26 @@ export component MobileApp inherits Window {
                     font-size: 13px;
                     font-weight: 700;
                     color: Theme.text-primary;
-                    letter-spacing: 1.2px;
+                    letter-spacing: 1px;
                     vertical-alignment: center;
                 }
 
                 HorizontalLayout {
-                    spacing: 10px;
+                    spacing: 8px;
 
-                    // زر مسح السجل
-                    Rectangle {
-                        background: clear-touch.pressed ? Theme.surface-pressed : clear-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                    if root.history_items.length > 0 : Rectangle {
+                        background: clear-hist-touch.pressed ? Theme.surface-pressed : clear-hist-touch.has-hover ? Theme.surface-hover : Theme.surface;
                         border-width: 1px;
                         border-color: Theme.border;
-                        border-radius: 8px;
+                        border-radius: 6px;
                         height: 30px;
                         animate background { duration: 120ms; }
-                        clear-touch := TouchArea {
+                        clear-hist-touch := TouchArea {
                             clicked => { root.clear_history(); }
                         }
                         HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
+                            padding-left: 10px;
+                            padding-right: 10px;
                             Text {
                                 text: "Clear";
                                 font-size: 11px;
@@ -479,9 +618,8 @@ export component MobileApp inherits Window {
                         }
                     }
 
-                    // زر الإغلاق
                     Rectangle {
-                        width: 30px;
+                        width: 32px;
                         height: 30px;
                         border-radius: 15px;
                         background: close-touch.pressed ? Theme.surface-pressed : close-touch.has-hover ? Theme.surface-hover : Theme.surface;
@@ -492,7 +630,7 @@ export component MobileApp inherits Window {
                             clicked => { root.toggle_history(); }
                         }
                         Text {
-                            text: "✕";
+                            text: "x";
                             font-size: 13px;
                             font-weight: 600;
                             color: Theme.text-secondary;
@@ -503,106 +641,76 @@ export component MobileApp inherits Window {
                 }
             }
 
-            // قائمة السجل القابلة للتمرير في الهاتف
-            ScrollView {
+            if root.history_items.length == 0 : VerticalLayout {
+                alignment: center;
                 vertical-stretch: 1;
+                Text {
+                    text: "No transfers yet";
+                    font-size: 13px;
+                    color: Theme.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
 
+            if root.history_items.length > 0 : ScrollView {
+                vertical-stretch: 1;
                 VerticalLayout {
-                    spacing: 10px;
-
-                    if root.history_items.length == 0 : Rectangle {
-                        height: 280px;
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 8px;
-                            Text {
-                                text: "No activity history yet";
-                                font-size: 14px;
-                                font-weight: 500;
-                                color: Theme.text-muted;
-                                horizontal-alignment: center;
-                            }
-                            Text {
-                                text: "All sent and received files will appear here";
-                                font-size: 11px;
-                                color: Theme.text-faint;
-                                horizontal-alignment: center;
-                            }
-                        }
-                    }
-
+                    spacing: 8px;
                     for item in root.history_items : Rectangle {
                         background: Theme.surface;
                         border-width: 1px;
                         border-color: Theme.border;
                         border-radius: Theme.radius-sm;
-                        height: 56px;
+                        height: 52px;
 
                         HorizontalLayout {
-                            padding: 12px;
+                            padding-left: 14px;
+                            padding-right: 14px;
                             spacing: 12px;
                             alignment: center;
 
-                            // أيقونة نوع العنصر
                             Rectangle {
-                                width: 34px;
-                                height: 34px;
-                                border-radius: 8px;
-                                background: Theme.recessed;
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: item.kind == "file" ? #10b98118 : #3b82f618;
                                 border-width: 1px;
-                                border-color: Theme.border-subtle;
+                                border-color: item.kind == "file" ? #10b98133 : #3b82f633;
+                                y: (parent.height - self.height) / 2;
 
                                 Text {
-                                    text: item.kind == "file" ? "FILE" : "CLIP";
-                                    font-size: 9px;
+                                    text: item.kind == "file" ? "F" : "C";
+                                    font-size: 12px;
                                     font-weight: 700;
-                                    letter-spacing: 0.5px;
-                                    color: Theme.text-secondary;
+                                    color: item.kind == "file" ? Theme.accent : #60a5fa;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                 }
                             }
 
-                            // نصوص العنوان والتفاصيل
                             VerticalLayout {
-                                alignment: center;
-                                spacing: 3px;
+                                spacing: 2px;
                                 horizontal-stretch: 1;
-
+                                alignment: center;
                                 Text {
                                     text: item.title;
-                                    font-size: 12px;
-                                    font-weight: 600;
+                                    font-size: 13px;
+                                    font-weight: 500;
                                     color: Theme.text-primary;
                                     overflow: elide;
                                 }
                                 Text {
                                     text: item.subtitle;
-                                    font-size: 11px;
+                                    font-size: 10px;
                                     color: Theme.text-muted;
-                                    overflow: elide;
                                 }
                             }
 
-                            // التوقيت وحالة النجاح
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 3px;
-                                min-width: 60px;
-
-                                Text {
-                                    text: item.timestamp;
-                                    font-size: 10px;
-                                    color: Theme.text-muted;
-                                    horizontal-alignment: end;
-                                }
-                                Text {
-                                    text: item.success ? "✓" : "!";
-                                    font-size: 11px;
-                                    font-weight: 700;
-                                    color: item.success ? Theme.accent : Theme.status-error;
-                                    horizontal-alignment: end;
-                                }
+                            Text {
+                                text: item.timestamp;
+                                font-size: 11px;
+                                color: Theme.text-muted;
+                                vertical-alignment: center;
                             }
                         }
                     }

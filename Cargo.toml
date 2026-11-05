@@ -33,9 +33,13 @@ slint = { version = "1.18", default-features = false, features = ["compat-1-2", 
 [build-dependencies]
 slint-build = "1.18"
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [package.metadata.android]
 package = "org.otium.flow"
 label = "FLOW by Otium"
+res = "android/res"
 icon = "@mipmap/ic_launcher"
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 
@@ -60,6 +64,12 @@ name = "android.permission.ACCESS_WIFI_STATE"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WRITE_EXTERNAL_STORAGE"
 
 
 
