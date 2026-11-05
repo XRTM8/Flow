@@ -30,6 +30,7 @@ export component DesktopApp inherits Window {
     in-out property <bool> update_in_progress: false;
     in-out property <string> draft_text: "";
     in-out property <bool> text_sent: false;
+    in-out property <string> lang: "EN"; // "EN" or "AR"
 
     callback copy_clipboard_clicked();
     callback send_clipboard_clicked();
@@ -42,6 +43,35 @@ export component DesktopApp inherits Window {
     callback send_custom_text(string);
     callback paste_to_draft();
     callback clear_draft();
+
+    FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control && event.text == "1") {
+                root.active_tab_index = 0;
+                return accept;
+            }
+            if (event.modifiers.control && event.text == "2") {
+                root.active_tab_index = 1;
+                return accept;
+            }
+            if (event.modifiers.control && event.text == "3") {
+                root.active_tab_index = 2;
+                return accept;
+            }
+            if (event.modifiers.control && event.text == "4") {
+                root.active_tab_index = 3;
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "o" || event.text == "O")) {
+                root.send_file_clicked();
+                return accept;
+            }
+            if (event.modifiers.control && event.text == "\n") {
+                root.send_custom_text(root.draft_text);
+                return accept;
+            }
+            return reject;
+        }
 
     VerticalLayout {
         padding-top: 16px;
@@ -1057,4 +1087,5 @@ export component DesktopApp inherits Window {
             }
         }
     }
+}
 }

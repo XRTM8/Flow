@@ -1,5 +1,5 @@
 #define MyAppName "FLOW by Otium"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.3.0"
 #define MyAppPublisher "Otium"
 #define MyAppURL "https://github.com/XRTM8/Flow"
 #define MyAppExeName "OtiumFlow.exe"
@@ -14,7 +14,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\Otium\Flow
 DisableProgramGroupPage=yes
-OutputBaseFilename=OtiumFlow-v2.2.0-Setup-x64
+OutputBaseFilename=OtiumFlow-v2.3.0-Setup-x64
 OutputDir=..\dist
 Compression=lzma2/ultra64
 SolidCompression=yes

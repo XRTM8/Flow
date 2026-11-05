@@ -19,6 +19,26 @@ const MAX_HEADER_SIZE: usize = 32 * 1024 * 1024; // 32 MB حماية ضد هجم
 const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024 * 1024; // 50 GB سقف أمان أقصى لحجم الملف المنقول لمنع استنزاف القرص
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15); // مهلة أمان قصوى لمنع هجمات Slowloris والتعليق الشبكي
 
+/// اتصال شبكي مع إعادة المحاولة التلقائية والتراجع الأسي ضد تقلبات الواي فاي
+pub async fn connect_with_retry(target: SocketAddr, max_retries: usize) -> std::io::Result<TcpStream> {
+    let mut delay = Duration::from_millis(80);
+    for attempt in 0..max_retries {
+        match tokio::time::timeout(Duration::from_millis(2500), TcpStream::connect(target)).await {
+            Ok(Ok(stream)) => {
+                let _ = stream.set_nodelay(true);
+                return Ok(stream);
+            }
+            Ok(Err(_)) | Err(_) if attempt + 1 < max_retries => {
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection attempt timed out")),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Max connection retries exceeded"))
+}
+
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL",
     "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -745,7 +765,7 @@ impl TransferManager {
         text: String,
         sender_id: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = TcpStream::connect(target).await?;
+        let mut stream = connect_with_retry(target, 3).await?;
         let _ = stream.set_nodelay(true);
         let header = PacketHeader::ClipboardText { content: text, sender_id };
         let header_bytes = serde_json::to_vec(&header)?;
@@ -770,7 +790,7 @@ impl TransferManager {
         data: Vec<u8>,
         sender_id: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = TcpStream::connect(target).await?;
+        let mut stream = connect_with_retry(target, 3).await?;
         let _ = stream.set_nodelay(true);
         let header = PacketHeader::ClipboardImage {
             width,
@@ -800,7 +820,7 @@ impl TransferManager {
         self_type: super::discovery::DeviceType,
         self_port: u16,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = tokio::time::timeout(Duration::from_millis(1500), TcpStream::connect(target)).await??;
+        let mut stream = connect_with_retry(target, 2).await?;
         let _ = stream.set_nodelay(true);
         let header = PacketHeader::PingAnnounce {
             id: self_id,
@@ -846,7 +866,7 @@ impl TransferManager {
             .unwrap_or_default()
             .as_secs();
 
-        let mut stream = TcpStream::connect(target).await?;
+        let mut stream = connect_with_retry(target, 3).await?;
         let _ = stream.set_nodelay(true);
         let header = PacketHeader::EncryptedPayload {
             nonce,
@@ -924,7 +944,7 @@ impl TransferManager {
 
         // إذا كان الملف أكبر من 5 ميجابايت، نستعلم أولاً هل لدى المستقبل جزء محمل مسبقاً لاستئنافه
         if total_size > 5 * 1024 * 1024 {
-            if let Ok(mut query_stream) = TcpStream::connect(target).await {
+            if let Ok(mut query_stream) = connect_with_retry(target, 2).await {
                 let _ = query_stream.set_nodelay(true);
                 let query = PacketHeader::ResumeQuery {
                     file_id: file_id.clone(),
@@ -992,7 +1012,7 @@ impl TransferManager {
             None
         };
 
-        let mut stream = TcpStream::connect(target).await?;
+        let mut stream = connect_with_retry(target, 3).await?;
         let _ = stream.set_nodelay(true);
         let header = PacketHeader::FileOffer {
             name: filename,

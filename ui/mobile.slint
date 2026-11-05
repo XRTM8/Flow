@@ -39,6 +39,7 @@ export component MobileApp inherits Window {
     // محرر الملاحظات والنصوص المباشر للهاتف
     in-out property <string> draft_text: "";
     in-out property <bool> text_sent: false;
+    in-out property <string> lang: "EN"; // "EN" or "AR"
 
     callback share_file_clicked();
     callback push_clipboard_clicked();
@@ -53,6 +54,8 @@ export component MobileApp inherits Window {
     callback send_custom_text(string);
     callback paste_to_draft();
     callback clear_draft();
+    callback open_system_picker_clicked();
+    callback open_storage_settings_clicked();
 
     VerticalLayout {
         padding-top: root.safe_area_top + 8px;
@@ -123,6 +126,29 @@ export component MobileApp inherits Window {
             HorizontalLayout {
                 spacing: 6px;
                 alignment: center;
+
+                Rectangle {
+                    background: lang-m-btn.pressed ? #1c263c : lang-m-btn.has-hover ? #172033 : Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 14px;
+                    height: 28px;
+                    lang-m-btn := TouchArea {
+                        clicked => { root.lang = root.lang == "EN" ? "AR" : "EN"; }
+                    }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        alignment: center;
+                        Text {
+                            text: root.lang == "EN" ? "AR" : "EN";
+                            font-size: 9px;
+                            font-weight: 800;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
 
                 if root.update_available : Rectangle {
                     background: update-m-btn.pressed ? #3b82f644 : update-m-btn.has-hover ? #3b82f628 : #3b82f618;
@@ -569,8 +595,8 @@ export component MobileApp inherits Window {
 
                         // زر استعراض ملفات الهاتف
                         Rectangle {
-                            width: 220px;
-                            height: 42px;
+                            width: 240px;
+                            height: 40px;
                             border-radius: Theme.radius-sm;
                             background: #0284c7;
                             border-width: 1px;
@@ -584,11 +610,38 @@ export component MobileApp inherits Window {
                             HorizontalLayout {
                                 alignment: center;
                                 Text {
-                                    text: "BROWSE DEVICE FILES";
+                                    text: root.lang == "AR" ? "استعراض ملفات وذاكرة الجهاز" : "BROWSE DEVICE FILES";
                                     font-size: 11px;
                                     font-weight: 800;
                                     color: #ffffff;
                                     letter-spacing: 1px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // زر منتقي ملفات النظام الأصلي لأندرويد
+                        Rectangle {
+                            width: 240px;
+                            height: 36px;
+                            border-radius: Theme.radius-sm;
+                            background: Theme.surface-hover;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            x: (parent.width - self.width) / 2;
+
+                            saf-m-touch := TouchArea {
+                                clicked => { root.open_system_picker_clicked(); }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Text {
+                                    text: root.lang == "AR" ? "منتقي ملفات النظام الافتراضي (SAF)" : "SYSTEM FILE PICKER (SAF)";
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    color: Theme.text-secondary;
+                                    letter-spacing: 0.5px;
                                     vertical-alignment: center;
                                 }
                             }
@@ -1070,7 +1123,7 @@ export component MobileApp inherits Window {
                     horizontal-alignment: center;
                 }
                 Rectangle {
-                    width: 200px;
+                    width: 220px;
                     height: 38px;
                     border-radius: Theme.radius-sm;
                     background: #0284c7;
@@ -1088,6 +1141,30 @@ export component MobileApp inherits Window {
                             font-weight: 800;
                             color: #ffffff;
                             letter-spacing: 0.8px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 240px;
+                    height: 36px;
+                    border-radius: Theme.radius-sm;
+                    background: Theme.surface-hover;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    x: (parent.width - self.width) / 2;
+                    manage-perm-btn := TouchArea {
+                        clicked => { root.open_storage_settings_clicked(); }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.lang == "AR" ? "تفعيل صلاحية الملفات في الإعدادات" : "STORAGE PERMISSION SETTINGS";
+                            font-size: 9px;
+                            font-weight: 800;
+                            color: Theme.accent;
+                            letter-spacing: 0.5px;
                             vertical-alignment: center;
                         }
                     }

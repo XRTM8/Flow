@@ -173,6 +173,104 @@ pub fn open_android_url(url: &str) -> Result<(), Box<dyn std::error::Error + Sen
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+pub fn open_android_file_picker_intent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let ctx = ndk_context::android_context();
+    if !ctx.vm().is_null() && !ctx.context().is_null() {
+        if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) } {
+            if let Ok(mut env) = vm.attach_current_thread() {
+                let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+                if let Ok(action_str) = env.new_string("android.intent.action.GET_CONTENT") {
+                    if let Ok(intent_class) = env.find_class("android/content/Intent") {
+                        if let Ok(intent) = env.new_object(
+                            intent_class,
+                            "(Ljava/lang/String;)V",
+                            &[jni::objects::JValue::Object(&action_str)],
+                        ) {
+                            if let Ok(type_str) = env.new_string("*/*") {
+                                let _ = env.call_method(
+                                    &intent,
+                                    "setType",
+                                    "(Ljava/lang/String;)Landroid/content/Intent;",
+                                    &[jni::objects::JValue::Object(&type_str)],
+                                );
+                                let _ = env.call_method(
+                                    activity,
+                                    "startActivity",
+                                    "(Landroid/content/Intent;)V",
+                                    &[jni::objects::JValue::Object(&intent)],
+                                );
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::process::Command::new("/system/bin/am")
+        .args(["start", "-a", "android.intent.action.GET_CONTENT", "-t", "*/*"])
+        .spawn();
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+pub fn open_android_storage_settings() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let ctx = ndk_context::android_context();
+    if !ctx.vm().is_null() && !ctx.context().is_null() {
+        if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) } {
+            if let Ok(mut env) = vm.attach_current_thread() {
+                let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+                if let Ok(action_str) = env.new_string("android.settings.APPLICATION_DETAILS_SETTINGS") {
+                    if let Ok(uri_str) = env.new_string("package:org.otium.flow") {
+                        if let Ok(uri_class) = env.find_class("android/net/Uri") {
+                            if let Ok(uri) = env.call_static_method(
+                                uri_class,
+                                "parse",
+                                "(Ljava/lang/String;)Landroid/net/Uri;",
+                                &[jni::objects::JValue::Object(&uri_str)],
+                            ).and_then(|v| v.l()) {
+                                if let Ok(intent_class) = env.find_class("android/content/Intent") {
+                                    if let Ok(intent) = env.new_object(
+                                        intent_class,
+                                        "(Ljava/lang/String;Landroid/net/Uri;)V",
+                                        &[
+                                            jni::objects::JValue::Object(&action_str),
+                                            jni::objects::JValue::Object(&uri),
+                                        ],
+                                    ) {
+                                        let _ = env.call_method(
+                                            activity,
+                                            "startActivity",
+                                            "(Landroid/content/Intent;)V",
+                                            &[jni::objects::JValue::Object(&intent)],
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::process::Command::new("/system/bin/am")
+        .args(["start", "-a", "android.settings.APPLICATION_DETAILS_SETTINGS", "-d", "package:org.otium.flow"])
+        .spawn();
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn open_android_file_picker_intent() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn open_android_storage_settings() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    Ok(())
+}
+
 async fn find_available_tcp_port(start_port: u16) -> (u16, tokio::net::TcpListener) {
     for port in start_port..(start_port + 20) {
         if let Ok(listener) = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
@@ -917,6 +1015,14 @@ pub fn start_mobile_engine() -> Result<(), Box<dyn std::error::Error>> {
         let _ = ui_clear_draft.upgrade_in_event_loop(|ui| {
             ui.set_draft_text("".into());
         });
+    });
+
+    app.on_open_system_picker_clicked(move || {
+        let _ = open_android_file_picker_intent();
+    });
+
+    app.on_open_storage_settings_clicked(move || {
+        let _ = open_android_storage_settings();
     });
 
     app.run()?;
