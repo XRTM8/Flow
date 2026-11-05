@@ -3418,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "otium-flow"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "arboard",
  "chacha20poly1305",
