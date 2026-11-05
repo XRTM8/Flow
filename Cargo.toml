@@ -1,6 +1,6 @@
 [package]
 name = "otium-flow"
-version = "2.3.0"
+version = "2.4.0"
 edition = "2021"
 default-run = "otium-flow-app"
 

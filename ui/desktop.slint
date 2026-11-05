@@ -4,14 +4,15 @@ import { ScrollView } from "std-widgets.slint";
 
 export component DesktopApp inherits Window {
     title: "Otium Flow";
-    min-width: 740px;
-    min-height: 560px;
-    preferred-width: 820px;
-    preferred-height: 600px;
-    background: Theme.background;
+    min-width: 760px;
+    min-height: 580px;
+    preferred-width: 840px;
+    preferred-height: 620px;
+    background: Theme.bg-gradient;
     default-font-family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
-    in-out property <int> active_tab_index: 0; // 0: STREAM, 1: FILES, 2: MESH, 3: ACTIVITY
+    // المتغيرات البرمجية المتوافقة بنسبة 100% مع Rust
+    in-out property <int> active_tab_index: 0;
     in-out property <bool> show_history: false;
     in-out property <string> peer_name: "Scanning Wi-Fi...";
     in-out property <bool> is_connected: false;
@@ -46,22 +47,6 @@ export component DesktopApp inherits Window {
 
     FocusScope {
         key-pressed(event) => {
-            if (event.modifiers.control && event.text == "1") {
-                root.active_tab_index = 0;
-                return accept;
-            }
-            if (event.modifiers.control && event.text == "2") {
-                root.active_tab_index = 1;
-                return accept;
-            }
-            if (event.modifiers.control && event.text == "3") {
-                root.active_tab_index = 2;
-                return accept;
-            }
-            if (event.modifiers.control && event.text == "4") {
-                root.active_tab_index = 3;
-                return accept;
-            }
             if (event.modifiers.control && (event.text == "o" || event.text == "O")) {
                 root.send_file_clicked();
                 return accept;
@@ -70,424 +55,557 @@ export component DesktopApp inherits Window {
                 root.send_custom_text(root.draft_text);
                 return accept;
             }
+            if (event.modifiers.control && (event.text == "h" || event.text == "H")) {
+                root.show_history = !root.show_history;
+                return accept;
+            }
+            if (event.text == "\u{001b}") { // Escape
+                if (root.show_history) {
+                    root.show_history = false;
+                    return accept;
+                }
+            }
             return reject;
         }
 
-    VerticalLayout {
-        padding-top: 16px;
-        padding-bottom: 16px;
-        padding-left: 20px;
-        padding-right: 20px;
-        spacing: 14px;
+        VerticalLayout {
+            padding-top: 18px;
+            padding-bottom: 18px;
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 16px;
 
-        // 1. الشريط العلوي الشامل (Raycast Omnibar Header)
-        HorizontalLayout {
-            alignment: space-between;
-            height: 40px;
-
-            // شعار الهوية النقي
+            // 1. الشريط العلوي النقي الموحد (Header: Brand + Radar Pill + Controls)
             HorizontalLayout {
-                spacing: 10px;
-                alignment: center;
+                alignment: space-between;
+                height: 38px;
 
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 8px;
-                    background: #111726;
-                    border-width: 1px;
-                    border-color: Theme.accent-glow;
-
-                    // علامة هندسية متجهة نقية
-                    Rectangle {
-                        width: 10px;
-                        height: 10px;
-                        border-radius: 3px;
-                        background: Theme.accent;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
-
+                // شعار الهوية
                 HorizontalLayout {
-                    spacing: 6px;
+                    spacing: 10px;
                     alignment: center;
 
-                    Text {
-                        text: "FLOW";
-                        font-size: 16px;
-                        font-weight: 800;
-                        color: Theme.text-primary;
-                        letter-spacing: 2.5px;
-                        vertical-alignment: center;
-                    }
-
                     Rectangle {
-                        width: 1px;
-                        height: 12px;
-                        background: Theme.border;
-                        y: (parent.height - self.height) / 2;
-                    }
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 9px;
+                        background: Theme.card-gradient;
+                        border-width: 1px;
+                        border-color: Theme.border-gradient;
 
-                    Text {
-                        text: "OTIUM";
-                        font-size: 10px;
-                        font-weight: 700;
-                        color: Theme.text-muted;
-                        letter-spacing: 1.5px;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            // أدوات الحالة وتحديث البرنامج والتحقق الأمني
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: center;
-
-                if root.update_available : Rectangle {
-                    background: update-btn.pressed ? #3b82f644 : update-btn.has-hover ? #3b82f628 : #3b82f618;
-                    border-width: 1px;
-                    border-color: #3b82f666;
-                    border-radius: Theme.radius-sm;
-                    height: 30px;
-                    animate background { duration: 120ms; }
-                    update-btn := TouchArea {
-                        clicked => { root.apply_update_clicked(); }
-                    }
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        alignment: center;
-                        Text {
-                            text: root.update_in_progress ? "UPDATING..." : "UPDATE " + root.update_version;
-                            font-size: 10px;
-                            font-weight: 700;
-                            color: #60a5fa;
-                            letter-spacing: 1px;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("../assets/icons/wifi.svg");
+                            width: 16px;
+                            height: 16px;
+                            colorize: root.is_connected ? Theme.status-online : Theme.accent;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                         }
                     }
-                }
-
-                // كبسولة الاتصال بالأجهزة
-                Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: root.is_connected ? Theme.accent-glow : Theme.border;
-                    border-radius: Theme.radius-sm;
-                    height: 30px;
 
                     HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
                         spacing: 8px;
                         alignment: center;
 
+                        Text {
+                            text: "FLOW";
+                            font-size: 16px;
+                            font-weight: 800;
+                            color: Theme.text-primary;
+                            letter-spacing: 2px;
+                            vertical-alignment: center;
+                        }
+
                         Rectangle {
-                            width: 7px;
-                            height: 7px;
-                            border-radius: 3.5px;
-                            background: root.is_connected ? Theme.status-online : Theme.status-waiting;
-                            border-width: 1px;
-                            border-color: root.is_connected ? #00d2ff88 : #f59e0b88;
+                            width: 1px;
+                            height: 14px;
+                            background: Theme.border-subtle;
                             y: (parent.height - self.height) / 2;
                         }
 
                         Text {
-                            text: root.peer_name;
-                            font-size: 11px;
-                            font-weight: 600;
-                            color: root.is_connected ? Theme.text-primary : Theme.text-secondary;
+                            text: "OTIUM";
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: Theme.text-muted;
+                            letter-spacing: 1.5px;
                             vertical-alignment: center;
-                        }
-
-                        if root.is_connected && root.sas_code != "" : Rectangle {
-                            background: #00d2ff18;
-                            border-radius: 4px;
-                            height: 18px;
-                            HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
-                                Text {
-                                    text: "#" + root.sas_code + " VERIFIED";
-                                    font-size: 9px;
-                                    font-weight: 800;
-                                    color: Theme.accent;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
                         }
                     }
                 }
-            }
-        }
 
-        // 2. بطاقة تتبع النقل اللحظي (HUD Transfer Telemetry)
-        if root.transfer_active : Rectangle {
-            background: #0b111c;
-            border-width: 1px;
-            border-color: Theme.accent;
-            border-radius: Theme.radius-sm;
-            height: 56px;
-
-            VerticalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                padding-top: 8px;
-                padding-bottom: 8px;
-                spacing: 6px;
-
+                // كبسولة حالة الجهاز والأدوات الموحدة
                 HorizontalLayout {
-                    alignment: space-between;
+                    spacing: 8px;
+                    alignment: center;
 
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: center;
-                        Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            border-radius: 5px;
-                            background: #00d2ff22;
+                    // كبسولة الرادار الشبكي اللحظي
+                    Rectangle {
+                        background: Theme.card-gradient;
+                        border-width: 1px;
+                        border-color: root.is_connected ? #10b98166 : Theme.border-gradient;
+                        border-radius: Theme.radius-sm;
+                        height: 32px;
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                            alignment: center;
+
+                            // نقطة الرادار النابضة
                             Rectangle {
-                                width: 6px;
-                                height: 6px;
-                                border-radius: 3px;
-                                background: Theme.accent;
-                                x: (parent.width - self.width) / 2;
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: root.is_connected ? Theme.status-online : Theme.status-waiting;
+                                border-width: 1px;
+                                border-color: root.is_connected ? #10b98188 : #f59e0b88;
                                 y: (parent.height - self.height) / 2;
                             }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 1px;
+
                             Text {
-                                text: root.transfer_name;
-                                font-size: 12px;
+                                text: root.peer_name;
+                                font-size: 11px;
                                 font-weight: 600;
-                                color: Theme.text-primary;
-                                overflow: elide;
+                                color: root.is_connected ? Theme.text-primary : Theme.text-secondary;
+                                vertical-alignment: center;
                             }
-                            Text {
-                                text: root.transfer_status;
-                                font-size: 10px;
-                                color: Theme.accent;
-                                font-weight: 600;
-                            }
-                        }
-                    }
 
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: center;
+                            if root.is_connected && root.sas_code != "" : Rectangle {
+                                background: #10b98118;
+                                border-radius: 4px;
+                                height: 20px;
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    spacing: 4px;
+                                    alignment: center;
 
-                        Text {
-                            text: Math.round(root.transfer_progress * 100) + "%";
-                            font-size: 12px;
-                            font-weight: 700;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
+                                    Image {
+                                        source: @image-url("../assets/icons/shield.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.status-shield;
+                                        vertical-alignment: center;
+                                    }
 
-                        Rectangle {
-                            width: 24px;
-                            height: 22px;
-                            border-radius: 5px;
-                            background: cancel-desk-btn.pressed ? #f43f5e44 : #1c263c;
-                            border-width: 1px;
-                            border-color: #f43f5e55;
-                            cancel-desk-btn := TouchArea {
-                                clicked => { root.cancel_transfer_clicked(); }
-                            }
-                            // علامة إغلاق هندسية نقية
-                            VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 10px;
-                                    height: 1.5px;
-                                    background: Theme.status-error;
-                                    x: (parent.width - self.width) / 2;
+                                    Text {
+                                        text: "#" + root.sas_code;
+                                        font-size: 9px;
+                                        font-weight: 800;
+                                        color: Theme.status-shield;
+                                        letter-spacing: 0.5px;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                Rectangle {
-                    height: 4px;
-                    border-radius: 2px;
-                    background: #04060a;
+                    // زر التحديث إذا توفر
+                    if root.update_available : Rectangle {
+                        background: update-btn.pressed ? #3b82f644 : update-btn.has-hover ? #3b82f628 : #3b82f618;
+                        border-width: 1px;
+                        border-color: #3b82f666;
+                        border-radius: Theme.radius-sm;
+                        height: 32px;
+                        animate background { duration: 120ms; }
+                        update-btn := TouchArea {
+                            clicked => { root.apply_update_clicked(); }
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 6px;
+                            alignment: center;
+                            Image {
+                                source: @image-url("../assets/icons/refresh.svg");
+                                width: 12px;
+                                height: 12px;
+                                colorize: #60a5fa;
+                            }
+                            Text {
+                                text: root.update_in_progress ? "UPDATING..." : "UPDATE";
+                                font-size: 10px;
+                                font-weight: 700;
+                                color: #60a5fa;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
 
+                    // زر السجل المنسدل (History Drawer Button)
                     Rectangle {
-                        x: 0;
-                        y: 0;
-                        height: parent.height;
-                        width: parent.width * root.transfer_progress;
-                        border-radius: 2px;
-                        background: Theme.accent;
-                        animate width { duration: 100ms; easing: ease-out; }
+                        background: hist-top-btn.pressed ? #1c263c : hist-top-btn.has-hover ? #172033 : root.show_history ? #16243d : Theme.card-gradient;
+                        border-width: 1px;
+                        border-color: root.show_history ? Theme.border-focus : Theme.border-gradient;
+                        border-radius: Theme.radius-sm;
+                        height: 32px;
+                        animate background { duration: 120ms; }
+                        hist-top-btn := TouchArea {
+                            clicked => { root.show_history = !root.show_history; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 6px;
+                            alignment: center;
+                            Image {
+                                source: @image-url("../assets/icons/history.svg");
+                                width: 13px;
+                                height: 13px;
+                                colorize: root.show_history ? Theme.accent : Theme.text-secondary;
+                            }
+                            Text {
+                                text: root.history_items.length > 0 ? "HISTORY (" + root.history_items.length + ")" : "HISTORY";
+                                font-size: 10px;
+                                font-weight: 700;
+                                color: root.show_history ? Theme.accent : Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // زر التبديل بين اللغات (EN / AR)
+                    Rectangle {
+                        background: lang-desk-btn.pressed ? #1c263c : lang-desk-btn.has-hover ? #172033 : Theme.card-gradient;
+                        border-width: 1px;
+                        border-color: Theme.border-gradient;
+                        border-radius: Theme.radius-sm;
+                        height: 32px;
+                        animate background { duration: 120ms; }
+                        lang-desk-btn := TouchArea {
+                            clicked => { root.lang = root.lang == "EN" ? "AR" : "EN"; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            alignment: center;
+                            Text {
+                                text: root.lang == "EN" ? "AR" : "EN";
+                                font-size: 10px;
+                                font-weight: 800;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        // 3. مساحة العمل الرئيسية مع استيعاب كامل ومساحات تنفس رحبة
-        VerticalLayout {
-            vertical-stretch: 1;
+            // 2. بطاقة تتبع النقل اللحظي (HUD Transfer Telemetry - تظهر فقط أثناء النقل)
+            if root.transfer_active : Rectangle {
+                background: Theme.card-gradient;
+                border-width: 1px;
+                border-color: Theme.accent;
+                border-radius: Theme.radius-sm;
+                height: 56px;
 
-            // ================== الواجهة 0: البث والملاحظات المباشرة (STREAM) ==================
-            if root.active_tab_index == 0 : VerticalLayout {
-                spacing: 14px;
-                vertical-stretch: 1;
+                VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 6px;
 
-                // محرر الملاحظات والنصوص المباشر (Omnibar Text Composer)
-                Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: omni-input.has-focus ? Theme.border-focus : Theme.border;
-                    border-radius: Theme.radius-md;
-                    vertical-stretch: 1;
-                    animate border-color { duration: 120ms; }
-
-                    VerticalLayout {
-                        padding: 16px;
-                        spacing: 12px;
+                    HorizontalLayout {
+                        alignment: space-between;
 
                         HorizontalLayout {
-                            alignment: space-between;
+                            spacing: 10px;
+                            alignment: center;
 
-                            HorizontalLayout {
-                                spacing: 8px;
+                            Image {
+                                source: @image-url("../assets/icons/file-up.svg");
+                                width: 16px;
+                                height: 16px;
+                                colorize: Theme.accent;
+                            }
+
+                            VerticalLayout {
                                 alignment: center;
+                                spacing: 1px;
                                 Text {
-                                    text: "DIRECT NOTE & MESSAGE BEAM";
-                                    font-size: 11px;
-                                    font-weight: 700;
+                                    text: root.transfer_name;
+                                    font-size: 12px;
+                                    font-weight: 600;
                                     color: Theme.text-primary;
-                                    letter-spacing: 1.2px;
+                                    overflow: elide;
                                 }
-                                Rectangle {
-                                    background: #00d2ff18;
-                                    border-radius: 4px;
-                                    height: 18px;
-                                    HorizontalLayout {
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
-                                            text: "Zero-Latency Stream";
-                                            font-size: 9px;
-                                            font-weight: 700;
-                                            color: Theme.accent;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 8px;
-
-                                Rectangle {
-                                    background: p-desk-touch.pressed ? #1c263c : p-desk-touch.has-hover ? #172033 : #0c121e;
-                                    border-width: 1px;
-                                    border-color: p-desk-touch.has-hover ? Theme.border-focus : Theme.border;
-                                    border-radius: 6px;
-                                    height: 26px;
-                                    p-desk-touch := TouchArea {
-                                        clicked => { root.paste_to_draft(); }
-                                    }
-                                    HorizontalLayout {
-                                        padding-left: 10px;
-                                        padding-right: 10px;
-                                        Text {
-                                            text: "Paste Clipboard";
-                                            font-size: 11px;
-                                            font-weight: 600;
-                                            color: Theme.text-secondary;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-
-                                if root.draft_text != "" : Rectangle {
-                                    background: clr-desk-touch.pressed ? #f43f5e33 : #0c121e;
-                                    border-width: 1px;
-                                    border-color: #f43f5e55;
-                                    border-radius: 6px;
-                                    height: 26px;
-                                    clr-desk-touch := TouchArea {
-                                        clicked => { root.clear_draft(); }
-                                    }
-                                    HorizontalLayout {
-                                        padding-left: 8px;
-                                        padding-right: 8px;
-                                        Text {
-                                            text: "Clear";
-                                            font-size: 10px;
-                                            font-weight: 600;
-                                            color: Theme.status-error;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // صندوق النص
-                        Rectangle {
-                            background: Theme.recessed;
-                            border-radius: Theme.radius-sm;
-                            border-width: 1px;
-                            border-color: omni-input.has-focus ? #00d2ff66 : Theme.border-subtle;
-                            vertical-stretch: 1;
-
-                            if root.draft_text == "" : Text {
-                                text: "Type any note, message, link, code snippet or command to beam directly to phone...";
-                                font-size: 13px;
-                                color: Theme.text-faint;
-                                wrap: word-wrap;
-                                x: 12px;
-                                y: 12px;
-                                width: parent.width - 24px;
-                            }
-
-                            omni-input := TextInput {
-                                text <=> root.draft_text;
-                                single-line: false;
-                                wrap: word-wrap;
-                                font-size: 13px;
-                                color: Theme.text-primary;
-                                selection-background-color: #00d2ff44;
-                                selection-foreground-color: #ffffff;
-                                x: 12px;
-                                y: 10px;
-                                width: parent.width - 24px;
-                                height: parent.height - 20px;
-                            }
-                        }
-
-                        // شريط الإجراء السفلي للمحرر
-                        HorizontalLayout {
-                            alignment: space-between;
-
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: center;
                                 Text {
-                                    text: root.draft_text != "" ? "Text ready to stream" : "Direct stream buffer";
-                                    font-size: 11px;
-                                    color: root.draft_text != "" ? Theme.accent : Theme.text-muted;
-                                    vertical-alignment: center;
+                                    text: root.transfer_status;
+                                    font-size: 10px;
+                                    color: Theme.accent;
+                                    font-weight: 600;
                                 }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: center;
+
+                            Text {
+                                text: Math.round(root.transfer_progress * 100) + "%";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: Theme.accent;
+                                vertical-alignment: center;
                             }
 
                             Rectangle {
-                                background: beam-now-touch.pressed ? #0284c7 : beam-now-touch.has-hover ? #0369a1 : #0284c7;
+                                width: 26px;
+                                height: 26px;
+                                border-radius: 6px;
+                                background: cancel-desk-btn.pressed ? #f43f5e44 : cancel-desk-btn.has-hover ? #f43f5e28 : #1c263c;
                                 border-width: 1px;
-                                border-color: Theme.accent;
+                                border-color: #f43f5e55;
+                                cancel-desk-btn := TouchArea {
+                                    clicked => { root.cancel_transfer_clicked(); }
+                                }
+                                Image {
+                                    source: @image-url("../assets/icons/x.svg");
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Theme.status-error;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Theme.recessed;
+
+                        Rectangle {
+                            x: 0;
+                            y: 0;
+                            height: parent.height;
+                            width: parent.width * root.transfer_progress;
+                            border-radius: 2px;
+                            background: Theme.beam-gradient;
+                            animate width { duration: 100ms; easing: ease-out; }
+                        }
+                    }
+                }
+            }
+
+            // 3. المحور المركزي الموحد: منصة الإرسال الشاملة (Direct Beam Console)
+            // تلغي تماماً الانقسام بين النصوص والملفات، وتوفر كل شيء في مكان واحد
+            Rectangle {
+                background: Theme.card-gradient;
+                border-width: 1px;
+                border-color: omni-input.has-focus ? Theme.border-focus : Theme.border-gradient;
+                border-radius: Theme.radius-md;
+                vertical-stretch: 1;
+                animate border-color { duration: 120ms; }
+
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 14px;
+
+                    // رأس المحور: عنوان وأزرار اللصق والمسح
+                    HorizontalLayout {
+                        alignment: space-between;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+
+                            Image {
+                                source: @image-url("../assets/icons/send.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: Theme.accent;
+                            }
+
+                            Text {
+                                text: root.lang == "AR" ? "منصة البث والإرسال السريع المباشر" : "DIRECT BEAM CONSOLE";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: Theme.text-primary;
+                                letter-spacing: 1.2px;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            Rectangle {
+                                background: p-desk-touch.pressed ? #1c263c : p-desk-touch.has-hover ? #172033 : #0a0e18;
+                                border-width: 1px;
+                                border-color: p-desk-touch.has-hover ? Theme.border-focus : Theme.border-subtle;
+                                border-radius: 6px;
+                                height: 26px;
+                                p-desk-touch := TouchArea {
+                                    clicked => { root.paste_to_draft(); }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../assets/icons/copy.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.text-secondary;
+                                    }
+                                    Text {
+                                        text: root.lang == "AR" ? "لصق الحافظة" : "Paste Clipboard";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            if root.draft_text != "" : Rectangle {
+                                background: clr-desk-touch.pressed ? #f43f5e33 : #0a0e18;
+                                border-width: 1px;
+                                border-color: #f43f5e55;
+                                border-radius: 6px;
+                                height: 26px;
+                                clr-desk-touch := TouchArea {
+                                    clicked => { root.clear_draft(); }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 4px;
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../assets/icons/trash.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.status-error;
+                                    }
+                                    Text {
+                                        text: root.lang == "AR" ? "مسح" : "Clear";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.status-error;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // حقل كتابة الملاحظات والأوامر والنصوص
+                    Rectangle {
+                        background: Theme.recessed-gradient;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: omni-input.has-focus ? #00d2ff55 : Theme.border-subtle;
+                        vertical-stretch: 1;
+
+                        if root.draft_text == "" : Text {
+                            text: root.lang == "AR" ? "اكتب أي ملاحظة أو رسالة أو رابط أو كود، أو اضغط زر إرسال الملفات بالأسفل..." : "Type any note, message, link, code snippet, or click below to beam files directly...";
+                            font-size: 13px;
+                            color: Theme.text-faint;
+                            wrap: word-wrap;
+                            x: 14px;
+                            y: 12px;
+                            width: parent.width - 28px;
+                        }
+
+                        omni-input := TextInput {
+                            text <=> root.draft_text;
+                            single-line: false;
+                            wrap: word-wrap;
+                            font-size: 13px;
+                            color: Theme.text-primary;
+                            selection-background-color: #00d2ff44;
+                            selection-foreground-color: #ffffff;
+                            x: 14px;
+                            y: 12px;
+                            width: parent.width - 28px;
+                            height: parent.height - 24px;
+                        }
+                    }
+
+                    // شريط الإجراءات الموحد: إرسال النصوص + إرسال الملفات معاً في مكان واحد
+                    HorizontalLayout {
+                        alignment: space-between;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+                            Text {
+                                text: root.draft_text != "" ? (root.lang == "AR" ? "النص جاهز للإرسال الفوري" : "Ready to beam") : (root.lang == "AR" ? "جاهز للنقل فائق السرعة عبر Wi-Fi" : "Zero-latency encrypted P2P stream");
+                                font-size: 11px;
+                                color: root.draft_text != "" ? Theme.accent : Theme.text-muted;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // الأزرار التفاعلية المزدوجة
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            // زر إرسال الملفات الفوري (Emerald Gradient)
+                            Rectangle {
+                                background: file-btn-touch.pressed ? #047857 : file-btn-touch.has-hover ? Theme.file-gradient-hover : Theme.file-gradient;
                                 border-radius: Theme.radius-sm;
-                                height: 34px;
+                                height: 38px;
+                                animate background { duration: 120ms; }
+
+                                file-btn-touch := TouchArea {
+                                    clicked => { root.send_file_clicked(); }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    spacing: 8px;
+                                    alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/file-up.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: #ffffff;
+                                    }
+
+                                    Text {
+                                        text: root.lang == "AR" ? "إرسال ملفات أو صور" : "SEND FILES / PHOTOS";
+                                        font-size: 11px;
+                                        font-weight: 800;
+                                        color: #ffffff;
+                                        letter-spacing: 0.8px;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Rectangle {
+                                        background: #ffffff25;
+                                        border-radius: 4px;
+                                        height: 18px;
+                                        HorizontalLayout {
+                                            padding-left: 5px;
+                                            padding-right: 5px;
+                                            Text {
+                                                text: "Ctrl+O";
+                                                font-size: 9px;
+                                                font-weight: 700;
+                                                color: #ffffff;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // زر إرسال النص اللحظي (Azure Beam Gradient)
+                            Rectangle {
+                                background: beam-now-touch.pressed ? #0284c7 : beam-now-touch.has-hover ? Theme.beam-gradient-hover : Theme.beam-gradient;
+                                border-radius: Theme.radius-sm;
+                                height: 38px;
                                 animate background { duration: 120ms; }
 
                                 beam-now-touch := TouchArea {
@@ -500,25 +618,31 @@ export component DesktopApp inherits Window {
                                     spacing: 8px;
                                     alignment: center;
 
+                                    Image {
+                                        source: @image-url("../assets/icons/send.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: #ffffff;
+                                    }
+
                                     Text {
-                                        text: root.text_sent ? "SENT TO PEER" : "BEAM TO PEER";
+                                        text: root.text_sent ? (root.lang == "AR" ? "تم الإرسال" : "SENT TO PEER") : (root.lang == "AR" ? "إرسال النص المكتوب" : "BEAM NOTE");
                                         font-size: 11px;
                                         font-weight: 800;
                                         color: #ffffff;
-                                        letter-spacing: 1px;
+                                        letter-spacing: 0.8px;
                                         vertical-alignment: center;
                                     }
 
-                                    // Keycap هندسي
                                     Rectangle {
-                                        background: #ffffff22;
+                                        background: #ffffff25;
                                         border-radius: 4px;
                                         height: 18px;
                                         HorizontalLayout {
                                             padding-left: 5px;
                                             padding-right: 5px;
                                             Text {
-                                                text: "RETURN";
+                                                text: "Ctrl+Enter";
                                                 font-size: 9px;
                                                 font-weight: 700;
                                                 color: #ffffff;
@@ -531,555 +655,273 @@ export component DesktopApp inherits Window {
                         }
                     }
                 }
+            }
 
-                // بطاقة استعراض الحافظة المستلمة
-                Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    border-radius: Theme.radius-md;
-                    height: 120px;
+            // 4. بطاقة المحتوى المستلم في الأسفل مباشرة (Live Received Deck)
+            Rectangle {
+                background: Theme.card-gradient;
+                border-width: 1px;
+                border-color: Theme.border-gradient;
+                border-radius: Theme.radius-md;
+                height: 124px;
 
-                    VerticalLayout {
-                        padding: 14px;
-                        spacing: 8px;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
 
                         HorizontalLayout {
-                            alignment: space-between;
+                            spacing: 8px;
+                            alignment: center;
+
+                            Image {
+                                source: @image-url("../assets/icons/smartphone.svg");
+                                width: 13px;
+                                height: 13px;
+                                colorize: Theme.text-muted;
+                            }
+
                             Text {
-                                text: "RECEIVED CLIPBOARD FROM PEER";
+                                text: root.lang == "AR" ? "المحتوى المستلم على هذا الكمبيوتر" : "RECEIVED ON THIS PC";
                                 font-size: 10px;
                                 font-weight: 700;
                                 color: Theme.text-muted;
                                 letter-spacing: 1px;
                             }
+                        }
 
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            // زر فتح مجلد التنزيلات
                             Rectangle {
-                                background: copy-clip-btn.pressed ? #1c263c : #0c121e;
+                                background: open-dl-btn.pressed ? #1c263c : open-dl-btn.has-hover ? #172033 : #0a0e18;
                                 border-width: 1px;
-                                border-color: Theme.border;
+                                border-color: Theme.border-subtle;
+                                border-radius: 5px;
+                                height: 24px;
+                                open-dl-btn := TouchArea {
+                                    clicked => { root.open_downloads_clicked(); }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 5px;
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../assets/icons/folder.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.text-secondary;
+                                    }
+                                    Text {
+                                        text: root.lang == "AR" ? "فتح المجلد" : "Open Folder";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // زر نسخ النص المستلم
+                            Rectangle {
+                                background: copy-clip-btn.pressed ? #1c263c : copy-clip-btn.has-hover ? #172033 : #0a0e18;
+                                border-width: 1px;
+                                border-color: root.clipboard_copied ? Theme.status-shield : Theme.border-subtle;
                                 border-radius: 5px;
                                 height: 24px;
                                 copy-clip-btn := TouchArea {
                                     clicked => { root.copy_clipboard_clicked(); }
                                 }
                                 HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 10px;
-                                    Text {
-                                        text: root.clipboard_copied ? "COPIED" : "COPY TO PC";
-                                        font-size: 10px;
-                                        font-weight: 700;
-                                        color: root.clipboard_copied ? Theme.accent : Theme.text-secondary;
-                                        letter-spacing: 0.5px;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            background: Theme.recessed;
-                            border-radius: Theme.radius-sm;
-                            border-width: 1px;
-                            border-color: Theme.border-subtle;
-                            vertical-stretch: 1;
-
-                            Text {
-                                text: root.clipboard_text;
-                                font-size: 12px;
-                                color: root.clipboard_text == "No clipboard synced yet" ? Theme.text-faint : Theme.text-primary;
-                                wrap: word-wrap;
-                                x: 10px;
-                                y: 8px;
-                                width: parent.width - 20px;
-                                height: parent.height - 16px;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ================== الواجهة 1: نقل وإسقاط الملفات (FILES) ==================
-            if root.active_tab_index == 1 : VerticalLayout {
-                spacing: 14px;
-                vertical-stretch: 1;
-
-                drop-area-desk := Rectangle {
-                    background: drop-desk-touch.has-hover ? #131a29 : Theme.surface;
-                    border-width: 1.5px;
-                    border-color: drop-desk-touch.has-hover ? Theme.accent : Theme.border;
-                    border-radius: Theme.radius-md;
-                    animate background { duration: 150ms; }
-                    animate border-color { duration: 150ms; }
-                    vertical-stretch: 1;
-
-                    drop-desk-touch := TouchArea {
-                        clicked => { root.send_file_clicked(); }
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 16px;
-                        padding: 24px;
-
-                        // مؤشر دائري هندسي نقي
-                        Rectangle {
-                            width: 68px;
-                            height: 68px;
-                            border-radius: 34px;
-                            background: drop-desk-touch.has-hover ? #00d2ff22 : #0a0f18;
-                            border-width: 1px;
-                            border-color: drop-desk-touch.has-hover ? Theme.accent : Theme.border;
-                            x: (parent.width - self.width) / 2;
-
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 4px;
-                                Rectangle {
-                                    width: 2px;
-                                    height: 18px;
-                                    background: drop-desk-touch.has-hover ? Theme.accent : Theme.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                }
-                                Rectangle {
-                                    width: 14px;
-                                    height: 2px;
-                                    background: drop-desk-touch.has-hover ? Theme.accent : Theme.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                }
-                            }
-                        }
-
-                        VerticalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: "Drop files or folders here";
-                                font-size: 15px;
-                                font-weight: 700;
-                                color: Theme.text-primary;
-                                horizontal-alignment: center;
-                            }
-                            Text {
-                                text: "Direct hardware-accelerated local Wi-Fi transfer at 100+ MB/s";
-                                font-size: 12px;
-                                color: Theme.text-muted;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        // زر تصفح الملفات
-                        Rectangle {
-                            width: 170px;
-                            height: 38px;
-                            border-radius: Theme.radius-sm;
-                            background: drop-desk-touch.has-hover ? #0284c7 : #0369a1;
-                            border-width: 1px;
-                            border-color: Theme.accent;
-                            x: (parent.width - self.width) / 2;
-
-                            HorizontalLayout {
-                                alignment: center;
-                                Text {
-                                    text: "BROWSE FILES";
-                                    font-size: 11px;
-                                    font-weight: 800;
-                                    color: #ffffff;
-                                    letter-spacing: 1px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // زر فتح مجلد التنزيلات
-                Rectangle {
-                    background: open-dl-btn.pressed ? Theme.surface-pressed : open-dl-btn.has-hover ? Theme.surface-hover : Theme.surface;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    border-radius: Theme.radius-sm;
-                    height: 42px;
-
-                    open-dl-btn := TouchArea {
-                        clicked => { root.open_downloads_clicked(); }
-                    }
-
-                    HorizontalLayout {
-                        alignment: center;
-                        Text {
-                            text: "OPEN RECEIVED FILES DIRECTORY";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: Theme.text-secondary;
-                            letter-spacing: 1px;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-
-            // ================== الواجهة 2: الشبكة والجهاز المتصل (MESH) ==================
-            if root.active_tab_index == 2 : VerticalLayout {
-                spacing: 14px;
-                vertical-stretch: 1;
-
-                Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: root.is_connected ? #00d2ff44 : Theme.border;
-                    border-radius: Theme.radius-md;
-                    vertical-stretch: 1;
-
-                    VerticalLayout {
-                        padding: 24px;
-                        spacing: 20px;
-                        alignment: center;
-
-                        // أيقونة الجهاز الهندسية الدقيقة
-                        Rectangle {
-                            width: 72px;
-                            height: 72px;
-                            border-radius: 18px;
-                            background: root.is_connected ? #00d2ff18 : Theme.recessed;
-                            border-width: 1.5px;
-                            border-color: root.is_connected ? Theme.accent : Theme.border-subtle;
-                            x: (parent.width - self.width) / 2;
-
-                            VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 24px;
-                                    height: 38px;
-                                    border-radius: 5px;
-                                    border-width: 2px;
-                                    border-color: root.is_connected ? Theme.accent : Theme.text-muted;
-                                    x: (parent.width - self.width) / 2;
-
-                                    Rectangle {
-                                        width: 14px;
-                                        height: 24px;
-                                        y: 4px;
-                                        x: (parent.width - self.width) / 2;
-                                        background: root.is_connected ? #00d2ff33 : #ffffff10;
-                                        border-radius: 2px;
-                                    }
-                                }
-                            }
-                        }
-
-                        VerticalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: root.peer_name;
-                                font-size: 18px;
-                                font-weight: 800;
-                                color: Theme.text-primary;
-                                horizontal-alignment: center;
-                            }
-                            Text {
-                                text: root.is_connected ? "Direct Zero-Hop P2P Connection Active" : "Searching local Wi-Fi subnet for peers...";
-                                font-size: 12px;
-                                color: root.is_connected ? Theme.accent : Theme.text-muted;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        // بطاقة المواصفات التشفيرية
-                        Rectangle {
-                            background: Theme.recessed;
-                            border-radius: Theme.radius-sm;
-                            border-width: 1px;
-                            border-color: Theme.border-subtle;
-                            width: 380px;
-                            height: 90px;
-                            x: (parent.width - self.width) / 2;
-
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 8px;
-                                alignment: center;
-
-                                HorizontalLayout {
-                                    alignment: space-between;
-                                    Text {
-                                        text: "ENCRYPTION CIPHER";
-                                        font-size: 10px;
-                                        font-weight: 700;
-                                        color: Theme.text-muted;
-                                        letter-spacing: 1px;
-                                    }
-                                    Text {
-                                        text: "ChaCha20-Poly1305 E2EE";
-                                        font-size: 11px;
-                                        font-weight: 700;
-                                        color: Theme.text-primary;
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    alignment: space-between;
-                                    Text {
-                                        text: "SECURITY CODE";
-                                        font-size: 10px;
-                                        font-weight: 700;
-                                        color: Theme.text-muted;
-                                        letter-spacing: 1px;
-                                    }
-                                    Text {
-                                        text: root.sas_code != "" ? "#" + root.sas_code + " (Pairwise Verified)" : "Establishing Session...";
-                                        font-size: 11px;
-                                        font-weight: 700;
-                                        color: Theme.accent;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ================== الواجهة 3: سجل النشاطات (ACTIVITY) ==================
-            if root.active_tab_index == 3 : Rectangle {
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: Theme.border;
-                border-radius: Theme.radius-md;
-                vertical-stretch: 1;
-
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 12px;
-
-                    HorizontalLayout {
-                        alignment: space-between;
-                        Text {
-                            text: "ACTIVITY HISTORY";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: Theme.text-primary;
-                            letter-spacing: 1.2px;
-                        }
-
-                        if root.history_items.length > 0 : Rectangle {
-                            background: clr-all-btn.pressed ? #f43f5e33 : #0c121e;
-                            border-radius: 5px;
-                            border-width: 1px;
-                            border-color: #f43f5e55;
-                            height: 24px;
-                            clr-all-btn := TouchArea {
-                                clicked => { root.clear_history(); }
-                            }
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                Text {
-                                    text: "CLEAR";
-                                    font-size: 9px;
-                                    font-weight: 700;
-                                    color: Theme.status-error;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-
-                    if root.history_items.length == 0 : VerticalLayout {
-                        alignment: center;
-                        vertical-stretch: 1;
-                        spacing: 8px;
-                        Text {
-                            text: "No transfers yet in this session";
-                            font-size: 13px;
-                            color: Theme.text-muted;
-                            horizontal-alignment: center;
-                        }
-                        Text {
-                            text: "Beamed notes and sent files will appear here with verification tokens";
-                            font-size: 11px;
-                            color: Theme.text-faint;
-                            horizontal-alignment: center;
-                        }
-                    }
-
-                    if root.history_items.length > 0 : ScrollView {
-                        vertical-stretch: 1;
-                        VerticalLayout {
-                            spacing: 8px;
-                            for item in root.history_items : Rectangle {
-                                background: Theme.recessed;
-                                border-radius: Theme.radius-sm;
-                                border-width: 1px;
-                                border-color: Theme.border-subtle;
-                                height: 46px;
-
-                                HorizontalLayout {
-                                    padding-left: 14px;
-                                    padding-right: 14px;
-                                    spacing: 12px;
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 5px;
                                     alignment: center;
-
-                                    Rectangle {
-                                        width: 24px;
-                                        height: 24px;
-                                        border-radius: 6px;
-                                        background: item.kind == "file" ? #00d2ff18 : #6366f118;
-                                        border-width: 1px;
-                                        border-color: item.kind == "file" ? #00d2ff44 : #6366f144;
-                                        y: (parent.height - self.height) / 2;
-
-                                        Rectangle {
-                                            width: 6px;
-                                            height: 6px;
-                                            border-radius: 3px;
-                                            background: item.kind == "file" ? Theme.accent : #818cf8;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
+                                    Image {
+                                        source: root.clipboard_copied ? @image-url("../assets/icons/check.svg") : @image-url("../assets/icons/copy.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: root.clipboard_copied ? Theme.status-shield : Theme.text-secondary;
                                     }
-
-                                    VerticalLayout {
-                                        spacing: 2px;
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        Text {
-                                            text: item.title;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                            color: Theme.text-primary;
-                                            overflow: elide;
-                                        }
-                                        Text {
-                                            text: item.subtitle;
-                                            font-size: 10px;
-                                            color: Theme.text-muted;
-                                        }
-                                    }
-
                                     Text {
-                                        text: item.timestamp;
+                                        text: root.clipboard_copied ? (root.lang == "AR" ? "تم النسخ" : "COPIED") : (root.lang == "AR" ? "نسخ" : "Copy to PC");
                                         font-size: 10px;
-                                        color: Theme.text-muted;
+                                        font-weight: 700;
+                                        color: root.clipboard_copied ? Theme.status-shield : Theme.text-secondary;
                                         vertical-alignment: center;
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.recessed-gradient;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        vertical-stretch: 1;
+
+                        Text {
+                            text: root.clipboard_text;
+                            font-size: 12px;
+                            color: root.clipboard_text == "No clipboard synced yet" ? Theme.text-faint : Theme.text-primary;
+                            wrap: word-wrap;
+                            x: 12px;
+                            y: 8px;
+                            width: parent.width - 24px;
+                            height: parent.height - 16px;
                         }
                     }
                 }
             }
         }
 
-        // 4. الدوك السفلي للتنقل الانسيابي بين الواجهات (Floating Raycast Bottom Dock)
-        HorizontalLayout {
-            alignment: center;
-            height: 48px;
+        // 5. نافذة السجل المنزلقة (Slide-over History Drawer) - تظهر بنعومة وفقط عند فتحها
+        if root.show_history : Rectangle {
+            x: parent.width - 340px;
+            y: 50px;
+            width: 320px;
+            height: parent.height - 70px;
+            background: #0d121df8;
+            border-width: 1px;
+            border-color: Theme.border-focus;
+            border-radius: Theme.radius-md;
 
-            Rectangle {
-                background: #090e18f2;
-                border-width: 1px;
-                border-color: Theme.border;
-                border-radius: 24px;
-                height: 44px;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
 
                 HorizontalLayout {
-                    padding: 4px;
-                    spacing: 6px;
+                    alignment: space-between;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        Image {
+                            source: @image-url("../assets/icons/history.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: Theme.accent;
+                        }
+                        Text {
+                            text: root.lang == "AR" ? "سجل النشاطات" : "SESSION ACTIVITY";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: Theme.text-primary;
+                            letter-spacing: 1px;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+
+                        if root.history_items.length > 0 : Rectangle {
+                            background: clr-all-btn.pressed ? #f43f5e33 : #0a0e18;
+                            border-radius: 5px;
+                            border-width: 1px;
+                            border-color: #f43f5e55;
+                            height: 22px;
+                            clr-all-btn := TouchArea {
+                                clicked => { root.clear_history(); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                Text {
+                                    text: root.lang == "AR" ? "مسح" : "CLEAR";
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    color: Theme.status-error;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 5px;
+                            background: #141c2c;
+                            close-hist-btn := TouchArea {
+                                clicked => { root.show_history = false; }
+                            }
+                            Image {
+                                source: @image-url("../assets/icons/x.svg");
+                                width: 10px;
+                                height: 10px;
+                                colorize: Theme.text-muted;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                    }
+                }
+
+                if root.history_items.length == 0 : VerticalLayout {
                     alignment: center;
-
-                    // Tab 0: STREAM
-                    Rectangle {
-                        background: root.active_tab_index == 0 ? #16243d : #00000000;
-                        border-width: root.active_tab_index == 0 ? 1px : 0px;
-                        border-color: root.active_tab_index == 0 ? Theme.border-focus : #00000000;
-                        border-radius: 18px;
-                        animate background { duration: 150ms; }
-                        t0-touch := TouchArea {
-                            clicked => { root.active_tab_index = 0; }
-                        }
-                        HorizontalLayout {
-                            padding-left: 18px;
-                            padding-right: 18px;
-                            Text {
-                                text: "STREAM";
-                                font-size: 11px;
-                                font-weight: 700;
-                                color: root.active_tab_index == 0 ? Theme.text-primary : Theme.text-muted;
-                                letter-spacing: 1.2px;
-                                vertical-alignment: center;
-                            }
-                        }
+                    vertical-stretch: 1;
+                    spacing: 8px;
+                    Text {
+                        text: root.lang == "AR" ? "لا توجد عمليات نقل بعد" : "No transfers yet in this session";
+                        font-size: 12px;
+                        color: Theme.text-muted;
+                        horizontal-alignment: center;
                     }
+                }
 
-                    // Tab 1: FILES
-                    Rectangle {
-                        background: root.active_tab_index == 1 ? #16243d : #00000000;
-                        border-width: root.active_tab_index == 1 ? 1px : 0px;
-                        border-color: root.active_tab_index == 1 ? Theme.border-focus : #00000000;
-                        border-radius: 18px;
-                        animate background { duration: 150ms; }
-                        t1-touch := TouchArea {
-                            clicked => { root.active_tab_index = 1; }
-                        }
-                        HorizontalLayout {
-                            padding-left: 18px;
-                            padding-right: 18px;
-                            Text {
-                                text: "FILES";
-                                font-size: 11px;
-                                font-weight: 700;
-                                color: root.active_tab_index == 1 ? Theme.text-primary : Theme.text-muted;
-                                letter-spacing: 1.2px;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
+                if root.history_items.length > 0 : ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 8px;
+                        for item in root.history_items : Rectangle {
+                            background: Theme.recessed-gradient;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            height: 44px;
 
-                    // Tab 2: MESH
-                    Rectangle {
-                        background: root.active_tab_index == 2 ? #16243d : #00000000;
-                        border-width: root.active_tab_index == 2 ? 1px : 0px;
-                        border-color: root.active_tab_index == 2 ? Theme.border-focus : #00000000;
-                        border-radius: 18px;
-                        animate background { duration: 150ms; }
-                        t2-touch := TouchArea {
-                            clicked => { root.active_tab_index = 2; }
-                        }
-                        HorizontalLayout {
-                            padding-left: 18px;
-                            padding-right: 18px;
-                            Text {
-                                text: "MESH";
-                                font-size: 11px;
-                                font-weight: 700;
-                                color: root.active_tab_index == 2 ? Theme.text-primary : Theme.text-muted;
-                                letter-spacing: 1.2px;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 10px;
+                                alignment: center;
 
-                    // Tab 3: ACTIVITY
-                    Rectangle {
-                        background: root.active_tab_index == 3 ? #16243d : #00000000;
-                        border-width: root.active_tab_index == 3 ? 1px : 0px;
-                        border-color: root.active_tab_index == 3 ? Theme.border-focus : #00000000;
-                        border-radius: 18px;
-                        animate background { duration: 150ms; }
-                        t3-touch := TouchArea {
-                            clicked => { root.active_tab_index = 3; }
-                        }
-                        HorizontalLayout {
-                            padding-left: 18px;
-                            padding-right: 18px;
-                            Text {
-                                text: root.history_items.length > 0 ? "ACTIVITY (" + root.history_items.length + ")" : "ACTIVITY";
-                                font-size: 11px;
-                                font-weight: 700;
-                                color: root.active_tab_index == 3 ? Theme.text-primary : Theme.text-muted;
-                                letter-spacing: 1.2px;
-                                vertical-alignment: center;
+                                Image {
+                                    source: item.kind == "file" ? @image-url("../assets/icons/file-up.svg") : @image-url("../assets/icons/send.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: item.kind == "file" ? Theme.status-shield : Theme.accent;
+                                }
+
+                                VerticalLayout {
+                                    spacing: 1px;
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    Text {
+                                        text: item.title;
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: Theme.text-primary;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: item.subtitle;
+                                        font-size: 9px;
+                                        color: Theme.text-muted;
+                                    }
+                                }
+
+                                Text {
+                                    text: item.timestamp;
+                                    font-size: 9px;
+                                    color: Theme.text-muted;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }
@@ -1087,5 +929,4 @@ export component DesktopApp inherits Window {
             }
         }
     }
-}
 }

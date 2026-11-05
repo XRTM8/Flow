@@ -1,41 +1,54 @@
 export global Theme {
-    // فلسفة الأوبسيديان والنيون الكوبالتي (Obsidian & Electric Azure Design System)
-    // عمق فضائي ملكي، شفافيات زجاجية دقيقة، ولمسات إلكترونية ساطعة
-    in property <color> background: #07090e;
-    in property <color> surface: #0e131f;
+    // فلسفة الأوبسيديان الزجاجي والنيون الكوبالتي (Raycast / Linear Obsidian Glass)
+    
+    // التدرجات اللونية الزجاجية
+    in property <brush> bg-gradient: @linear-gradient(180deg, #0d111c 0%, #06080e 100%);
+    in property <brush> card-gradient: @linear-gradient(180deg, #121826 0%, #0a0e17 100%);
+    in property <brush> card-hover-gradient: @linear-gradient(180deg, #172033 0%, #0e1422 100%);
+    in property <brush> recessed-gradient: @linear-gradient(180deg, #05070c 0%, #070b13 100%);
+    in property <brush> border-gradient: @linear-gradient(180deg, #233149 0%, #111724 100%);
+    in property <brush> border-focus: #00d2ff;
+    
+    // الأزرار والتفاعلات النيون
+    in property <brush> beam-gradient: @linear-gradient(135deg, #00d2ff 0%, #0284c7 100%);
+    in property <brush> beam-gradient-hover: @linear-gradient(135deg, #38bdf8 0%, #0369a1 100%);
+    in property <brush> file-gradient: @linear-gradient(135deg, #10b981 0%, #059669 100%);
+    in property <brush> file-gradient-hover: @linear-gradient(135deg, #34d399 0%, #047857 100%);
+    
+    // الألوان المسطحة المتوافقة
+    in property <color> background: #06080e;
+    in property <color> surface: #0e1422;
     in property <color> surface-elevated: #141c2e;
-    in property <color> surface-hover: #19243b;
+    in property <color> surface-hover: #172033;
     in property <color> surface-pressed: #090e17;
-    in property <color> recessed: #04060a;
-
-    // الحدود الزجاجية الدقيقة بتباين فائق
-    in property <color> border: #1e293f;
-    in property <color> border-subtle: #141c2c;
-    in property <color> border-focus: #00d2ff;
+    in property <color> recessed: #05070c;
+    
+    // الحدود
+    in property <color> border: #1c2638;
+    in property <color> border-subtle: #111724;
     in property <color> border-accent-glow: #00d2ff44;
-
-    // ألوان النصوص ذات التباين المقروء
-    in property <color> text-primary: #f8fafc;
+    
+    // ألوان النصوص
+    in property <color> text-primary: #ffffff;
     in property <color> text-secondary: #94a3b8;
     in property <color> text-muted: #64748b;
-    in property <color> text-faint: #475569;
-
-    // اللمسات الكهربائية (Electric Azure / Cobalt Glow)
-    in property <color> accent: #00d2ff; // سيان كهربائي نيون
-    in property <color> accent-glow: #00d2ff24;
+    in property <color> text-faint: #334155;
+    
+    // اللمسات الكهربائية
+    in property <color> accent: #00d2ff;
+    in property <color> accent-glow: #00d2ff28;
     in property <color> accent-hover: #38bdf8;
     in property <color> accent-pressed: #0284c7;
-    in property <color> accent-secondary: #6366f1; // أرجواني كوزميك
-
-    // حالات الاتصال والأمان المشفر
-    in property <color> status-online: #00d2ff;
+    in property <color> accent-secondary: #6366f1;
+    
+    in property <color> status-online: #10b981;
     in property <color> status-waiting: #f59e0b;
     in property <color> status-error: #f43f5e;
     in property <color> status-shield: #10b981;
-
-    // مقاييس الزوايا والانحناءات الفاخرة
+    
+    // مقاييس الانحناء
     in property <length> radius-xs: 6px;
     in property <length> radius-sm: 10px;
     in property <length> radius-md: 16px;
-    in property <length> radius-lg: 22px;
+    in property <length> radius-lg: 24px;
 }
