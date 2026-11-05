@@ -1,6 +1,6 @@
 [package]
 name = "otium-flow"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 default-run = "otium-flow-app"
 
@@ -29,6 +29,8 @@ arboard = "3.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.18", default-features = false, features = ["compat-1-2", "backend-android-activity-06", "renderer-femtovg"] }
+jni = "0.21"
+ndk-context = "0.1"
 
 [build-dependencies]
 slint-build = "1.18"
@@ -46,6 +48,7 @@ build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 [package.metadata.android.application]
 label = "FLOW by Otium"
 icon = "@mipmap/ic_launcher"
+request_legacy_external_storage = true
 
 [package.metadata.android.signing.release]
 path = "flow.keystore"
@@ -74,6 +77,21 @@ name = "android.permission.READ_EXTERNAL_STORAGE"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.WRITE_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.MANAGE_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_MEDIA_IMAGES"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_MEDIA_VIDEO"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_MEDIA_AUDIO"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.REQUEST_INSTALL_PACKAGES"
 
 
 

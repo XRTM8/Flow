@@ -58,48 +58,119 @@ pub fn history_entries_to_slint_model(entries: &[HistoryEntry]) -> ModelRc<Histo
     Rc::new(VecModel::from(slint_items)).into()
 }
 
+fn scan_dir_recursive(
+    dir: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+    files: &mut Vec<(std::time::SystemTime, String, String, String)>,
+) {
+    if depth > max_depth {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if name.starts_with('.') || name == "Android" {
+                continue;
+            }
+            if path.is_dir() {
+                scan_dir_recursive(&path, depth + 1, max_depth, files);
+            } else if path.is_file() {
+                let meta = entry.metadata().ok();
+                let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let mtime = meta.as_ref().and_then(|m| m.modified().ok()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let size_str = if len < 1024 * 1024 {
+                    format!("{:.1} KB", len as f64 / 1024.0)
+                } else {
+                    format!("{:.1} MB", len as f64 / (1024.0 * 1024.0))
+                };
+                files.push((mtime, path.to_string_lossy().to_string(), name, size_str));
+            }
+        }
+    }
+}
+
 pub fn scan_storage_files() -> Vec<(String, String, String)> {
     let mut files = Vec::new();
     let dirs = [
         PathBuf::from("/storage/emulated/0/Download"),
         PathBuf::from("/storage/emulated/0/Download/OtiumFlow"),
+        PathBuf::from("/storage/emulated/0/Documents"),
+        PathBuf::from("/storage/emulated/0/DCIM"),
         PathBuf::from("/storage/emulated/0/Pictures"),
-        PathBuf::from("/storage/emulated/0/DCIM/Camera"),
+        PathBuf::from("/storage/emulated/0/Movies"),
+        PathBuf::from("/storage/emulated/0/Music"),
+        PathBuf::from("/storage/emulated/0"),
         PathBuf::from("/sdcard/Download"),
+        PathBuf::from("/sdcard/Documents"),
+        PathBuf::from("/sdcard/DCIM"),
         PathBuf::from("/sdcard/Pictures"),
     ];
 
     for dir in &dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    let meta = entry.metadata().ok();
-                    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                    let mtime = meta.as_ref().and_then(|m| m.modified().ok()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    let size_str = if len < 1024 * 1024 {
-                        format!("{:.1} KB", len as f64 / 1024.0)
-                    } else {
-                        format!("{:.1} MB", len as f64 / (1024.0 * 1024.0))
-                    };
-                    files.push((mtime, path.to_string_lossy().to_string(), name, size_str));
-                }
-            }
-        }
+        scan_dir_recursive(dir, 0, 2, &mut files);
     }
 
     // ترتيب تنازلي حسب الأحدث تعديلاً
     files.sort_by(|a, b| b.0.cmp(&a.0));
-    files.truncate(40);
+    // إزالة التكرارات
+    files.dedup_by(|a, b| a.1 == b.1);
+    files.truncate(80);
 
     files
         .into_iter()
         .map(|(_, path, name, size_str)| (path, name, size_str))
         .collect()
+}
+
+#[cfg(target_os = "android")]
+pub fn open_android_url(url: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let ctx = ndk_context::android_context();
+    if !ctx.vm().is_null() && !ctx.context().is_null() {
+        if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) } {
+            if let Ok(mut env) = vm.attach_current_thread() {
+                let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+                if let Ok(url_jstring) = env.new_string(url) {
+                    if let Ok(uri_class) = env.find_class("android/net/Uri") {
+                        if let Ok(uri) = env.call_static_method(
+                            uri_class,
+                            "parse",
+                            "(Ljava/lang/String;)Landroid/net/Uri;",
+                            &[jni::objects::JValue::Object(&url_jstring)],
+                        ).and_then(|v| v.l()) {
+                            if let Ok(intent_action) = env.new_string("android.intent.action.VIEW") {
+                                if let Ok(intent_class) = env.find_class("android/content/Intent") {
+                                    if let Ok(intent) = env.new_object(
+                                        intent_class,
+                                        "(Ljava/lang/String;Landroid/net/Uri;)V",
+                                        &[
+                                            jni::objects::JValue::Object(&intent_action),
+                                            jni::objects::JValue::Object(&uri),
+                                        ],
+                                    ) {
+                                        let _ = env.call_method(
+                                            activity,
+                                            "startActivity",
+                                            "(Landroid/content/Intent;)V",
+                                            &[jni::objects::JValue::Object(&intent)],
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = std::process::Command::new("/system/bin/am")
+        .args(["start", "-a", "android.intent.action.VIEW", "-d", url])
+        .spawn();
+
+    Ok(())
 }
 
 async fn find_available_tcp_port(start_port: u16) -> (u16, tokio::net::TcpListener) {
@@ -221,18 +292,32 @@ pub fn start_mobile_engine() -> Result<(), Box<dyn std::error::Error>> {
     let ui_apply = app_weak.clone();
     let update_apply_store = update_info.clone();
     app.on_apply_update_clicked(move || {
-        let ui_c = ui_apply.clone();
+        let _ui_c = ui_apply.clone();
         let store = update_apply_store.clone();
         tokio::spawn(async move {
             let upd_opt = store.read().await.clone();
-            if let Some(upd) = upd_opt {
-                let _ = ui_c.upgrade_in_event_loop(|ui| {
-                    ui.set_update_in_progress(true);
-                });
-                let _ = updater::apply_update_in_place(&upd).await;
-                let _ = ui_c.upgrade_in_event_loop(|ui| {
-                    ui.set_update_in_progress(false);
-                });
+            let _target_url = if let Some(upd) = &upd_opt {
+                upd.download_url.clone()
+            } else {
+                "https://github.com/XRTM8/Flow/releases/latest".to_string()
+            };
+
+            #[cfg(target_os = "android")]
+            {
+                let _ = open_android_url(&_target_url);
+            }
+
+            #[cfg(not(target_os = "android"))]
+            {
+                if let Some(upd) = upd_opt {
+                    let _ = _ui_c.upgrade_in_event_loop(|ui| {
+                        ui.set_update_in_progress(true);
+                    });
+                    let _ = updater::apply_update_in_place(&upd).await;
+                    let _ = _ui_c.upgrade_in_event_loop(|ui| {
+                        ui.set_update_in_progress(false);
+                    });
+                }
             }
         });
     });

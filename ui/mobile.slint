@@ -3,13 +3,16 @@ import { HistoryItem, FilePickerItem } from "models.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export component MobileApp inherits Window {
-    title: "Otium Flow — Ultra P2P Mesh";
+    title: "Otium Flow";
     background: Theme.background;
     default-font-family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
-    // المتغيرات الخاصة بالهاتف مع مراعاة منطقة البردة وشريط الإيماءات السفلي
+    // مسافات الأمان للشاشات الحديثة (Notch & Home Indicator)
     in-out property <length> safe_area_top: 48px;
     in-out property <length> safe_area_bottom: 34px;
+
+    // التنقل السفلي الانسيابي بين الواجهات (0: STREAM, 1: FILES, 2: MESH, 3: ACTIVITY)
+    in-out property <int> active_tab_index: 0;
 
     in-out property <string> peer_name: "Scanning Wi-Fi...";
     in-out property <bool> is_connected: false;
@@ -28,14 +31,14 @@ export component MobileApp inherits Window {
     in-out property <string> update_version: "";
     in-out property <bool> update_in_progress: false;
 
-    // استعراض واختيار الملفات داخل التطبيق للهاتف
+    // منتقي الملفات المتطور داخل التطبيق
     in-out property <bool> show_file_picker: false;
     in-out property <[FilePickerItem]> picker_files: [];
+    in-out property <string> file_filter: "all"; // all, images, docs, downloads
 
     // محرر الملاحظات والنصوص المباشر للهاتف
     in-out property <string> draft_text: "";
     in-out property <bool> text_sent: false;
-    in-out property <string> active_tab: "beam"; // "beam" or "history"
 
     callback share_file_clicked();
     callback push_clipboard_clicked();
@@ -47,75 +50,104 @@ export component MobileApp inherits Window {
     callback file_selected(string);
     callback close_file_picker();
     callback create_test_file();
-
-    // Callbacks للمحرر المباشر
     callback send_custom_text(string);
     callback paste_to_draft();
     callback clear_draft();
 
     VerticalLayout {
-        padding-top: root.safe_area_top + 10px;
-        padding-bottom: root.safe_area_bottom + 12px;
+        padding-top: root.safe_area_top + 8px;
+        padding-bottom: root.safe_area_bottom + 8px;
         padding-left: 18px;
         padding-right: 18px;
-        spacing: 14px;
+        spacing: 12px;
 
-        // 1. رأس شاشة الهاتف الفاخرة (Top Header & Telemetry Pill)
+        // 1. الشريط العلوي النقي (Top Minimalist Omnibar)
         HorizontalLayout {
             alignment: space-between;
+            height: 36px;
 
             HorizontalLayout {
                 spacing: 8px;
                 alignment: center;
 
                 Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 9px;
-                    background: #0e1726;
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 7px;
+                    background: #111726;
                     border-width: 1px;
                     border-color: Theme.accent-glow;
 
-                    Text {
-                        text: "⚡";
-                        font-size: 15px;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 2px;
+                        background: Theme.accent;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
                 }
 
-                VerticalLayout {
+                HorizontalLayout {
+                    spacing: 6px;
                     alignment: center;
-                    spacing: 1px;
-                    HorizontalLayout {
-                        spacing: 5px;
-                        Text {
-                            text: "FLOW";
-                            font-size: 17px;
-                            font-weight: 800;
-                            color: Theme.text-primary;
-                            letter-spacing: 1.5px;
-                        }
-                        Text {
-                            text: "P2P";
-                            font-size: 9px;
-                            font-weight: 700;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                    }
+
                     Text {
-                        text: "by Otium";
+                        text: "FLOW";
+                        font-size: 16px;
+                        font-weight: 800;
+                        color: Theme.text-primary;
+                        letter-spacing: 2px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        height: 12px;
+                        background: Theme.border;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: "OTIUM";
                         font-size: 10px;
+                        font-weight: 700;
                         color: Theme.text-muted;
+                        letter-spacing: 1px;
+                        vertical-alignment: center;
                     }
                 }
             }
 
-            // أدوات الحالة والتبديل
+            // أدوات الحالة وتحديث البرنامج المباشر للهاتف
             HorizontalLayout {
                 spacing: 6px;
                 alignment: center;
+
+                if root.update_available : Rectangle {
+                    background: update-m-btn.pressed ? #3b82f644 : update-m-btn.has-hover ? #3b82f628 : #3b82f618;
+                    border-width: 1px;
+                    border-color: #3b82f666;
+                    border-radius: 14px;
+                    height: 28px;
+                    animate background { duration: 120ms; }
+                    update-m-btn := TouchArea {
+                        clicked => { root.apply_update_clicked(); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: root.update_in_progress ? "UPDATING..." : "UPDATE " + root.update_version;
+                            font-size: 9px;
+                            font-weight: 800;
+                            color: #60a5fa;
+                            letter-spacing: 0.8px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
 
                 // كبسولة الاتصال
                 Rectangle {
@@ -123,7 +155,7 @@ export component MobileApp inherits Window {
                     border-width: 1px;
                     border-color: root.is_connected ? Theme.accent-glow : Theme.border;
                     border-radius: 14px;
-                    height: 30px;
+                    height: 28px;
 
                     HorizontalLayout {
                         padding-left: 10px;
@@ -132,9 +164,9 @@ export component MobileApp inherits Window {
                         alignment: center;
 
                         Rectangle {
-                            width: 8px;
-                            height: 8px;
-                            border-radius: 4px;
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
                             background: root.is_connected ? Theme.status-online : Theme.status-waiting;
                             border-width: 1px;
                             border-color: root.is_connected ? #00d2ff88 : #f59e0b88;
@@ -152,14 +184,14 @@ export component MobileApp inherits Window {
                         if root.is_connected && root.sas_code != "" : Rectangle {
                             background: #00d2ff18;
                             border-radius: 4px;
-                            height: 18px;
+                            height: 16px;
                             HorizontalLayout {
-                                padding-left: 5px;
-                                padding-right: 5px;
+                                padding-left: 4px;
+                                padding-right: 4px;
                                 Text {
                                     text: "#" + root.sas_code;
                                     font-size: 9px;
-                                    font-weight: 700;
+                                    font-weight: 800;
                                     color: Theme.accent;
                                     vertical-alignment: center;
                                 }
@@ -167,61 +199,33 @@ export component MobileApp inherits Window {
                         }
                     }
                 }
-
-                // زر التبديل بين الاستوديو وسجل النشاط
-                Rectangle {
-                    width: 32px;
-                    height: 30px;
-                    border-radius: 15px;
-                    background: root.active_tab == "history" ? #18253e : Theme.surface;
-                    border-width: 1px;
-                    border-color: root.active_tab == "history" ? Theme.border-focus : Theme.border;
-                    animate background { duration: 120ms; }
-
-                    tab-toggle-touch := TouchArea {
-                        clicked => {
-                            if root.active_tab == "beam" {
-                                root.active_tab = "history";
-                            } else {
-                                root.active_tab = "beam";
-                            }
-                        }
-                    }
-
-                    Text {
-                        text: root.active_tab == "history" ? "⚡" : "🕒";
-                        font-size: 13px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
             }
         }
 
-        // 2. بطاقة النقل النشط (Telemetry Transfer HUD)
+        // 2. بطاقة النقل النشط (HUD Transfer Telemetry)
         if root.transfer_active : Rectangle {
-            background: #0c121e;
+            background: #0b111c;
             border-width: 1px;
             border-color: Theme.accent;
             border-radius: Theme.radius-sm;
-            height: 64px;
+            height: 56px;
 
             VerticalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                padding-top: 8px;
-                padding-bottom: 8px;
-                spacing: 6px;
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 4px;
 
                 HorizontalLayout {
                     alignment: space-between;
 
                     VerticalLayout {
                         alignment: center;
-                        spacing: 2px;
+                        spacing: 1px;
                         Text {
                             text: root.transfer_name;
-                            font-size: 12px;
+                            font-size: 11px;
                             font-weight: 700;
                             color: Theme.text-primary;
                             overflow: elide;
@@ -229,7 +233,7 @@ export component MobileApp inherits Window {
                         }
                         Text {
                             text: root.transfer_status;
-                            font-size: 10px;
+                            font-size: 9px;
                             color: Theme.accent;
                             font-weight: 600;
                         }
@@ -241,45 +245,46 @@ export component MobileApp inherits Window {
 
                         Text {
                             text: Math.round(root.transfer_progress * 100) + "%";
-                            font-size: 12px;
-                            font-weight: 700;
+                            font-size: 11px;
+                            font-weight: 800;
                             color: Theme.accent;
                             vertical-alignment: center;
                         }
 
                         Rectangle {
-                            width: 26px;
-                            height: 24px;
-                            border-radius: 6px;
-                            background: cancel-mobile-touch.pressed ? #f43f5e33 : #1c263c;
+                            width: 24px;
+                            height: 22px;
+                            border-radius: 5px;
+                            background: cancel-m-btn.pressed ? #f43f5e44 : #1c263c;
                             border-width: 1px;
                             border-color: #f43f5e55;
-                            cancel-mobile-touch := TouchArea {
+                            cancel-m-btn := TouchArea {
                                 clicked => { root.cancel_transfer_clicked(); }
                             }
-                            Text {
-                                text: "x";
-                                font-size: 12px;
-                                font-weight: 700;
-                                color: Theme.status-error;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 10px;
+                                    height: 1.5px;
+                                    background: Theme.status-error;
+                                    x: (parent.width - self.width) / 2;
+                                }
                             }
                         }
                     }
                 }
 
                 Rectangle {
-                    height: 5px;
-                    border-radius: 2.5px;
-                    background: #070a10;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #04060a;
 
                     Rectangle {
                         x: 0;
                         y: 0;
                         height: parent.height;
                         width: parent.width * root.transfer_progress;
-                        border-radius: 2.5px;
+                        border-radius: 2px;
                         background: Theme.accent;
                         animate width { duration: 100ms; easing: ease-out; }
                     }
@@ -287,20 +292,21 @@ export component MobileApp inherits Window {
             }
         }
 
-        // 3. المحتوى الرئيسي (حسب التبويب المختار)
-        if root.active_tab == "beam" : ScrollView {
+        // 3. مساحة العمل المركزية (حسب التبويب النشط)
+        VerticalLayout {
             vertical-stretch: 1;
 
-            VerticalLayout {
+            // ================== الواجهة 0: البث المباشر والملاحظات (STREAM) ==================
+            if root.active_tab_index == 0 : VerticalLayout {
                 spacing: 12px;
+                vertical-stretch: 1;
 
-                // ===== البطاقة 1: محرر الملاحظات والنصوص المباشر (تكتب وتدز مباشرة) =====
                 Rectangle {
                     background: Theme.surface;
                     border-width: 1px;
-                    border-color: draft-mobile-input.has-focus ? Theme.border-focus : Theme.border;
+                    border-color: omni-m-input.has-focus ? Theme.border-focus : Theme.border;
                     border-radius: Theme.radius-md;
-                    height: 190px;
+                    vertical-stretch: 1;
                     animate border-color { duration: 120ms; }
 
                     VerticalLayout {
@@ -315,8 +321,8 @@ export component MobileApp inherits Window {
                                 alignment: center;
                                 Text {
                                     text: "BEAM NOTE TO PC";
-                                    font-size: 11px;
-                                    font-weight: 700;
+                                    font-size: 10px;
+                                    font-weight: 800;
                                     color: Theme.text-primary;
                                     letter-spacing: 1px;
                                 }
@@ -325,24 +331,24 @@ export component MobileApp inherits Window {
                             HorizontalLayout {
                                 spacing: 6px;
 
-                                // زر لصق ما في ذاكرة الهاتف بلمسة واحدة
                                 Rectangle {
-                                    background: paste-m-touch.pressed ? #1c263c : #0e1422;
+                                    background: p-m-btn.pressed ? #1c263c : #0c121e;
                                     border-width: 1px;
                                     border-color: Theme.border;
                                     border-radius: 6px;
                                     height: 24px;
-                                    paste-m-touch := TouchArea {
+                                    p-m-btn := TouchArea {
                                         clicked => { root.paste_to_draft(); }
                                     }
                                     HorizontalLayout {
                                         padding-left: 8px;
                                         padding-right: 8px;
                                         Text {
-                                            text: "📋 Paste";
-                                            font-size: 10px;
-                                            font-weight: 600;
+                                            text: "PASTE";
+                                            font-size: 9px;
+                                            font-weight: 700;
                                             color: Theme.text-secondary;
+                                            letter-spacing: 0.5px;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -352,15 +358,17 @@ export component MobileApp inherits Window {
                                     background: #f43f5e22;
                                     border-radius: 6px;
                                     height: 24px;
-                                    clear-m-touch := TouchArea {
+                                    clr-m-btn := TouchArea {
                                         clicked => { root.clear_draft(); }
                                     }
                                     HorizontalLayout {
                                         padding-left: 8px;
                                         padding-right: 8px;
                                         Text {
-                                            text: "🧹";
-                                            font-size: 10px;
+                                            text: "CLEAR";
+                                            font-size: 9px;
+                                            font-weight: 700;
+                                            color: Theme.status-error;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -368,7 +376,7 @@ export component MobileApp inherits Window {
                             }
                         }
 
-                        // صندوق إدخال النص
+                        // حقل الكتابة المباشر
                         Rectangle {
                             background: Theme.recessed;
                             border-radius: Theme.radius-sm;
@@ -377,7 +385,7 @@ export component MobileApp inherits Window {
                             vertical-stretch: 1;
 
                             if root.draft_text == "" : Text {
-                                text: "Type any note, message, link, or text to beam directly to PC...";
+                                text: "Type any note, message, link, code snippet or text to beam directly to PC...";
                                 font-size: 12px;
                                 color: Theme.text-faint;
                                 wrap: word-wrap;
@@ -386,7 +394,7 @@ export component MobileApp inherits Window {
                                 width: parent.width - 20px;
                             }
 
-                            draft-mobile-input := TextInput {
+                            omni-m-input := TextInput {
                                 text <=> root.draft_text;
                                 single-line: false;
                                 wrap: word-wrap;
@@ -401,16 +409,16 @@ export component MobileApp inherits Window {
                             }
                         }
 
-                        // زر إرسال الملاحظة مباشرة للحاسوب
+                        // زر الإرسال الأساسي
                         Rectangle {
-                            background: send-beam-m-touch.pressed ? #0284c7 : #0369a1;
+                            background: send-beam-m-btn.pressed ? #0284c7 : #0369a1;
                             border-width: 1px;
                             border-color: Theme.accent;
                             border-radius: Theme.radius-sm;
                             height: 38px;
                             animate background { duration: 120ms; }
 
-                            send-beam-m-touch := TouchArea {
+                            send-beam-m-btn := TouchArea {
                                 clicked => { root.send_custom_text(root.draft_text); }
                             }
 
@@ -418,10 +426,11 @@ export component MobileApp inherits Window {
                                 alignment: center;
                                 spacing: 8px;
                                 Text {
-                                    text: root.text_sent ? "✓ Beamed to PC!" : "🚀 Beam Note to PC";
-                                    font-size: 13px;
-                                    font-weight: 700;
+                                    text: root.text_sent ? "SENT TO PC" : "BEAM NOTE TO PC";
+                                    font-size: 11px;
+                                    font-weight: 800;
                                     color: #ffffff;
+                                    letter-spacing: 1px;
                                     vertical-alignment: center;
                                 }
                             }
@@ -429,152 +438,52 @@ export component MobileApp inherits Window {
                     }
                 }
 
-                // ===== البطاقة 2: مركز إرسال ومشاركة الملفات السريعة =====
+                // الحافظة المستلمة من الحاسوب
                 Rectangle {
                     background: Theme.surface;
                     border-width: 1px;
                     border-color: Theme.border;
                     border-radius: Theme.radius-md;
-                    height: 140px;
+                    height: 110px;
 
                     VerticalLayout {
-                        padding: 14px;
-                        spacing: 10px;
-
-                        Text {
-                            text: "FILE & MEDIA SHARE";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: Theme.text-muted;
-                            letter-spacing: 1px;
-                        }
-
-                        // الزر الأساسي البارز لاختيار ومشاركة الملفات
-                        Rectangle {
-                            background: share-btn-m.pressed ? #0284c7 : #0369a1;
-                            border-width: 1px;
-                            border-color: Theme.accent;
-                            border-radius: Theme.radius-sm;
-                            height: 44px;
-                            animate background { duration: 120ms; }
-
-                            share-btn-m := TouchArea {
-                                clicked => { root.share_file_clicked(); }
-                            }
-
-                            HorizontalLayout {
-                                alignment: center;
-                                spacing: 8px;
-                                Text {
-                                    text: "📁 Select & Beam Files / Photos";
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    color: #ffffff;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        // صف الإجراءات السريعة
-                        HorizontalLayout {
-                            spacing: 8px;
-
-                            // زر دفع الحافظة المباشر
-                            Rectangle {
-                                background: Theme.surface-hover;
-                                border-width: 1px;
-                                border-color: Theme.border;
-                                border-radius: 6px;
-                                height: 34px;
-                                horizontal-stretch: 1;
-
-                                push-clip-touch-m := TouchArea {
-                                    clicked => { root.push_clipboard_clicked(); }
-                                }
-
-                                HorizontalLayout {
-                                    alignment: center;
-                                    spacing: 6px;
-                                    Text {
-                                        text: root.clipboard_pushed ? "✓ Sent Clip" : "📋 Push Clipboard";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: root.clipboard_pushed ? Theme.accent : Theme.text-secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-
-                            // زر اختبار النقل الفوري
-                            Rectangle {
-                                background: #0e1726;
-                                border-width: 1px;
-                                border-color: #00d2ff44;
-                                border-radius: 6px;
-                                height: 34px;
-                                horizontal-stretch: 1;
-
-                                test-file-touch-m := TouchArea {
-                                    clicked => { root.create_test_file(); }
-                                }
-
-                                HorizontalLayout {
-                                    alignment: center;
-                                    spacing: 6px;
-                                    Text {
-                                        text: "⚡ Instant Test";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Theme.accent;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ===== البطاقة 3: النصوص المستلمة من الحاسوب =====
-                Rectangle {
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    border-radius: Theme.radius-md;
-                    height: 130px;
-
-                    VerticalLayout {
-                        padding: 14px;
+                        padding: 12px;
                         spacing: 8px;
 
                         HorizontalLayout {
                             alignment: space-between;
                             Text {
-                                text: "RECEIVED ON THIS DEVICE";
-                                font-size: 11px;
-                                font-weight: 700;
+                                text: "RECEIVED FROM PC";
+                                font-size: 9px;
+                                font-weight: 800;
                                 color: Theme.text-muted;
                                 letter-spacing: 1px;
                             }
 
-                            if root.text_cleaned : Rectangle {
-                                background: #00d2ff18;
-                                border-radius: 4px;
-                                height: 18px;
+                            Rectangle {
+                                background: copy-m-btn.pressed ? #1c263c : #0c121e;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                border-radius: 5px;
+                                height: 22px;
+                                copy-m-btn := TouchArea {
+                                    clicked => { root.copy_received_clicked(); }
+                                }
                                 HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
+                                    padding-left: 8px;
+                                    padding-right: 8px;
                                     Text {
-                                        text: "Cleaned";
+                                        text: root.clipboard_copied ? "COPIED" : "COPY";
                                         font-size: 9px;
                                         font-weight: 700;
-                                        color: Theme.accent;
+                                        color: root.clipboard_copied ? Theme.accent : Theme.text-secondary;
+                                        letter-spacing: 0.5px;
                                         vertical-alignment: center;
                                     }
                                 }
                             }
                         }
 
-                        // صندوق معاينة النص المستلم
                         Rectangle {
                             background: Theme.recessed;
                             border-radius: Theme.radius-sm;
@@ -584,34 +493,391 @@ export component MobileApp inherits Window {
 
                             Text {
                                 text: root.last_received_text;
-                                font-size: 12px;
+                                font-size: 11px;
                                 color: root.last_received_text == "No text received yet" ? Theme.text-faint : Theme.text-primary;
                                 wrap: word-wrap;
-                                x: 10px;
-                                y: 8px;
-                                width: parent.width - 20px;
-                                height: parent.height - 16px;
+                                x: 8px;
+                                y: 6px;
+                                width: parent.width - 16px;
+                                height: parent.height - 12px;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ================== الواجهة 1: مركز الملفات والمشاركة (FILES) ==================
+            if root.active_tab_index == 1 : VerticalLayout {
+                spacing: 12px;
+                vertical-stretch: 1;
+
+                Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 18px;
+                        alignment: center;
+
+                        Rectangle {
+                            width: 60px;
+                            height: 60px;
+                            border-radius: 30px;
+                            background: #00d2ff18;
+                            border-width: 1px;
+                            border-color: Theme.accent;
+                            x: (parent.width - self.width) / 2;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 3px;
+                                Rectangle {
+                                    width: 2px;
+                                    height: 16px;
+                                    background: Theme.accent;
+                                    x: (parent.width - self.width) / 2;
+                                }
+                                Rectangle {
+                                    width: 12px;
+                                    height: 2px;
+                                    background: Theme.accent;
+                                    x: (parent.width - self.width) / 2;
+                                }
                             }
                         }
 
-                        // زر النسخ
-                        Rectangle {
-                            background: copy-m-touch.pressed ? #1c263c : #0e1422;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            border-radius: 6px;
-                            height: 28px;
-                            copy-m-touch := TouchArea {
-                                clicked => { root.copy_received_clicked(); }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "Select & Beam Files";
+                                font-size: 16px;
+                                font-weight: 800;
+                                color: Theme.text-primary;
+                                horizontal-alignment: center;
                             }
+                            Text {
+                                text: "Beam photos, documents, and downloads to PC";
+                                font-size: 11px;
+                                color: Theme.text-muted;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        // زر استعراض ملفات الهاتف
+                        Rectangle {
+                            width: 220px;
+                            height: 42px;
+                            border-radius: Theme.radius-sm;
+                            background: #0284c7;
+                            border-width: 1px;
+                            border-color: Theme.accent;
+                            x: (parent.width - self.width) / 2;
+
+                            browse-m-touch := TouchArea {
+                                clicked => { root.share_file_clicked(); }
+                            }
+
                             HorizontalLayout {
                                 alignment: center;
                                 Text {
-                                    text: root.clipboard_copied ? "✓ Copied to Phone Clipboard" : "📋 Copy to Phone Clipboard";
+                                    text: "BROWSE DEVICE FILES";
                                     font-size: 11px;
-                                    font-weight: 600;
-                                    color: root.clipboard_copied ? Theme.accent : Theme.text-secondary;
+                                    font-weight: 800;
+                                    color: #ffffff;
+                                    letter-spacing: 1px;
                                     vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // إجراءات سريعة إضافية
+                        HorizontalLayout {
+                            spacing: 8px;
+                            width: 260px;
+                            x: (parent.width - self.width) / 2;
+
+                            Rectangle {
+                                background: Theme.surface-hover;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                border-radius: 6px;
+                                height: 32px;
+                                horizontal-stretch: 1;
+
+                                push-clip-btn-m := TouchArea {
+                                    clicked => { root.push_clipboard_clicked(); }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: root.clipboard_pushed ? "SENT CLIP" : "PUSH CLIPBOARD";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: root.clipboard_pushed ? Theme.accent : Theme.text-secondary;
+                                        letter-spacing: 0.5px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: #0c121e;
+                                border-width: 1px;
+                                border-color: #00d2ff44;
+                                border-radius: 6px;
+                                height: 32px;
+                                horizontal-stretch: 1;
+
+                                test-btn-m := TouchArea {
+                                    clicked => { root.create_test_file(); }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: "INSTANT TEST";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: Theme.accent;
+                                        letter-spacing: 0.5px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ================== الواجهة 2: الشبكة والجهاز المتصل (MESH) ==================
+            if root.active_tab_index == 2 : VerticalLayout {
+                spacing: 12px;
+                vertical-stretch: 1;
+
+                Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: root.is_connected ? #00d2ff44 : Theme.border;
+                    border-radius: Theme.radius-md;
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 16px;
+                        alignment: center;
+
+                        Rectangle {
+                            width: 60px;
+                            height: 60px;
+                            border-radius: 16px;
+                            background: root.is_connected ? #00d2ff18 : Theme.recessed;
+                            border-width: 1.5px;
+                            border-color: root.is_connected ? Theme.accent : Theme.border-subtle;
+                            x: (parent.width - self.width) / 2;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 30px;
+                                    height: 20px;
+                                    border-radius: 3px;
+                                    border-width: 1.5px;
+                                    border-color: root.is_connected ? Theme.accent : Theme.text-muted;
+                                    x: (parent.width - self.width) / 2;
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: root.peer_name;
+                                font-size: 16px;
+                                font-weight: 800;
+                                color: Theme.text-primary;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: root.is_connected ? "Zero-Hop Wi-Fi P2P Active" : "Scanning Wi-Fi...";
+                                font-size: 11px;
+                                color: root.is_connected ? Theme.accent : Theme.text-muted;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            background: Theme.recessed;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            width: 260px;
+                            height: 80px;
+                            x: (parent.width - self.width) / 2;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+                                alignment: center;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "SECURITY";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: Theme.text-muted;
+                                        letter-spacing: 1px;
+                                    }
+                                    Text {
+                                        text: "ChaCha20-Poly1305";
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        color: Theme.text-primary;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "VERIFICATION";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: Theme.text-muted;
+                                        letter-spacing: 1px;
+                                    }
+                                    Text {
+                                        text: root.sas_code != "" ? "#" + root.sas_code + " Verified" : "Connecting...";
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        color: Theme.accent;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ================== الواجهة 3: سجل النشاطات للهاتف (ACTIVITY) ==================
+            if root.active_tab_index == 3 : Rectangle {
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: Theme.radius-md;
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: "ACTIVITY HISTORY";
+                            font-size: 10px;
+                            font-weight: 800;
+                            color: Theme.text-primary;
+                            letter-spacing: 1px;
+                        }
+
+                        if root.history_items.length > 0 : Rectangle {
+                            background: clr-m-hist.pressed ? #f43f5e33 : #0c121e;
+                            border-radius: 4px;
+                            height: 22px;
+                            clr-m-hist := TouchArea {
+                                clicked => { root.clear_history(); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                Text {
+                                    text: "CLEAR";
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    color: Theme.status-error;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.history_items.length == 0 : VerticalLayout {
+                        alignment: center;
+                        vertical-stretch: 1;
+                        spacing: 6px;
+                        Text {
+                            text: "No transfers yet in this session";
+                            font-size: 12px;
+                            color: Theme.text-muted;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    if root.history_items.length > 0 : ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 6px;
+                            for item in root.history_items : Rectangle {
+                                background: Theme.recessed;
+                                border-radius: Theme.radius-sm;
+                                border-width: 1px;
+                                border-color: Theme.border-subtle;
+                                height: 44px;
+
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 10px;
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 22px;
+                                        height: 22px;
+                                        border-radius: 5px;
+                                        background: item.kind == "file" ? #00d2ff18 : #6366f118;
+                                        border-width: 1px;
+                                        border-color: item.kind == "file" ? #00d2ff44 : #6366f144;
+                                        y: (parent.height - self.height) / 2;
+
+                                        Rectangle {
+                                            width: 5px;
+                                            height: 5px;
+                                            border-radius: 2.5px;
+                                            background: item.kind == "file" ? Theme.accent : #818cf8;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        spacing: 1px;
+                                        horizontal-stretch: 1;
+                                        alignment: center;
+                                        Text {
+                                            text: item.title;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            color: Theme.text-primary;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: item.subtitle;
+                                            font-size: 9px;
+                                            color: Theme.text-muted;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: item.timestamp;
+                                        font-size: 9px;
+                                        color: Theme.text-muted;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }
@@ -620,124 +886,115 @@ export component MobileApp inherits Window {
             }
         }
 
-        // 4. عرض سجل النشاطات للهاتف
-        if root.active_tab == "history" : Rectangle {
-            background: Theme.surface;
-            border-width: 1px;
-            border-color: Theme.border;
-            border-radius: Theme.radius-md;
-            vertical-stretch: 1;
+        // 4. الدوك السفلي للتنقل الانسيابي بين واجهات الهاتف (Thumb Dock)
+        HorizontalLayout {
+            alignment: center;
+            height: 44px;
 
-            VerticalLayout {
-                padding: 14px;
-                spacing: 10px;
+            Rectangle {
+                background: #090e18f2;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: 22px;
+                height: 40px;
 
                 HorizontalLayout {
-                    alignment: space-between;
-                    Text {
-                        text: "ACTIVITY HISTORY";
-                        font-size: 11px;
-                        font-weight: 700;
-                        color: Theme.text-primary;
-                        letter-spacing: 1px;
-                    }
+                    padding: 3px;
+                    spacing: 4px;
+                    alignment: center;
 
-                    if root.history_items.length > 0 : Rectangle {
-                        background: clear-m-hist.pressed ? #f43f5e33 : #00000000;
-                        border-radius: 4px;
-                        height: 22px;
-                        clear-m-hist := TouchArea {
-                            clicked => { root.clear_history(); }
+                    // Tab 0: STREAM
+                    Rectangle {
+                        background: root.active_tab_index == 0 ? #16243d : #00000000;
+                        border-width: root.active_tab_index == 0 ? 1px : 0px;
+                        border-color: root.active_tab_index == 0 ? Theme.border-focus : #00000000;
+                        border-radius: 17px;
+                        animate background { duration: 150ms; }
+                        m-t0-touch := TouchArea {
+                            clicked => { root.active_tab_index = 0; }
                         }
                         HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
+                            padding-left: 14px;
+                            padding-right: 14px;
                             Text {
-                                text: "Clear";
+                                text: "STREAM";
                                 font-size: 10px;
-                                color: Theme.text-muted;
+                                font-weight: 700;
+                                color: root.active_tab_index == 0 ? Theme.text-primary : Theme.text-muted;
+                                letter-spacing: 1px;
                                 vertical-alignment: center;
                             }
                         }
                     }
-                }
 
-                if root.history_items.length == 0 : VerticalLayout {
-                    alignment: center;
-                    vertical-stretch: 1;
-                    spacing: 6px;
-                    Text {
-                        text: "No transfers yet";
-                        font-size: 12px;
-                        color: Theme.text-muted;
-                        horizontal-alignment: center;
+                    // Tab 1: FILES
+                    Rectangle {
+                        background: root.active_tab_index == 1 ? #16243d : #00000000;
+                        border-width: root.active_tab_index == 1 ? 1px : 0px;
+                        border-color: root.active_tab_index == 1 ? Theme.border-focus : #00000000;
+                        border-radius: 17px;
+                        animate background { duration: 150ms; }
+                        m-t1-touch := TouchArea {
+                            clicked => { root.active_tab_index = 1; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            Text {
+                                text: "FILES";
+                                font-size: 10px;
+                                font-weight: 700;
+                                color: root.active_tab_index == 1 ? Theme.text-primary : Theme.text-muted;
+                                letter-spacing: 1px;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
-                    Text {
-                        text: "Beamed files and notes will appear here";
-                        font-size: 10px;
-                        color: Theme.text-faint;
-                        horizontal-alignment: center;
+
+                    // Tab 2: MESH
+                    Rectangle {
+                        background: root.active_tab_index == 2 ? #16243d : #00000000;
+                        border-width: root.active_tab_index == 2 ? 1px : 0px;
+                        border-color: root.active_tab_index == 2 ? Theme.border-focus : #00000000;
+                        border-radius: 17px;
+                        animate background { duration: 150ms; }
+                        m-t2-touch := TouchArea {
+                            clicked => { root.active_tab_index = 2; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            Text {
+                                text: "MESH";
+                                font-size: 10px;
+                                font-weight: 700;
+                                color: root.active_tab_index == 2 ? Theme.text-primary : Theme.text-muted;
+                                letter-spacing: 1px;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
-                }
 
-                if root.history_items.length > 0 : ScrollView {
-                    vertical-stretch: 1;
-                    VerticalLayout {
-                        spacing: 6px;
-                        for item in root.history_items : Rectangle {
-                            background: Theme.recessed;
-                            border-radius: Theme.radius-sm;
-                            border-width: 1px;
-                            border-color: Theme.border-subtle;
-                            height: 46px;
-
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 10px;
-                                alignment: center;
-
-                                Rectangle {
-                                    width: 28px;
-                                    height: 28px;
-                                    border-radius: 6px;
-                                    background: item.kind == "file" ? #00d2ff18 : #6366f118;
-                                    border-width: 1px;
-                                    border-color: item.kind == "file" ? #00d2ff44 : #6366f144;
-                                    y: (parent.height - self.height) / 2;
-
-                                    Text {
-                                        text: item.kind == "file" ? "📁" : "⚡";
-                                        font-size: 11px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-                                }
-
-                                VerticalLayout {
-                                    spacing: 2px;
-                                    horizontal-stretch: 1;
-                                    alignment: center;
-                                    Text {
-                                        text: item.title;
-                                        font-size: 12px;
-                                        font-weight: 600;
-                                        color: Theme.text-primary;
-                                        overflow: elide;
-                                    }
-                                    Text {
-                                        text: item.subtitle;
-                                        font-size: 10px;
-                                        color: Theme.text-muted;
-                                    }
-                                }
-
-                                Text {
-                                    text: item.timestamp;
-                                    font-size: 10px;
-                                    color: Theme.text-muted;
-                                    vertical-alignment: center;
-                                }
+                    // Tab 3: ACTIVITY
+                    Rectangle {
+                        background: root.active_tab_index == 3 ? #16243d : #00000000;
+                        border-width: root.active_tab_index == 3 ? 1px : 0px;
+                        border-color: root.active_tab_index == 3 ? Theme.border-focus : #00000000;
+                        border-radius: 17px;
+                        animate background { duration: 150ms; }
+                        m-t3-touch := TouchArea {
+                            clicked => { root.active_tab_index = 3; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            Text {
+                                text: root.history_items.length > 0 ? "ACTIVITY (" + root.history_items.length + ")" : "ACTIVITY";
+                                font-size: 10px;
+                                font-weight: 700;
+                                color: root.active_tab_index == 3 ? Theme.text-primary : Theme.text-muted;
+                                letter-spacing: 1px;
+                                vertical-alignment: center;
                             }
                         }
                     }
@@ -746,18 +1003,18 @@ export component MobileApp inherits Window {
         }
     }
 
-    // 5. نافذة اختيار الملفات داخل التطبيق للهاتف (In-App File Picker Sheet)
+    // 5. نافذة اختيار واستعراض الملفات داخل التطبيق للهاتف (In-App File Browser Sheet)
     if root.show_file_picker : Rectangle {
         width: parent.width;
         height: parent.height;
-        background: #07090ef5;
+        background: #07090ef8;
         x: 0;
         y: 0;
         z: 100;
 
         VerticalLayout {
             padding-top: root.safe_area_top + 10px;
-            padding-bottom: root.safe_area_bottom + 12px;
+            padding-bottom: root.safe_area_bottom + 10px;
             padding-left: 18px;
             padding-right: 18px;
             spacing: 12px;
@@ -765,31 +1022,32 @@ export component MobileApp inherits Window {
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: "SELECT FILE TO BEAM";
-                    font-size: 12px;
-                    font-weight: 700;
+                    text: "DEVICE STORAGE BROWSER";
+                    font-size: 11px;
+                    font-weight: 800;
                     color: Theme.text-primary;
-                    letter-spacing: 1px;
+                    letter-spacing: 1.2px;
                     vertical-alignment: center;
                 }
 
                 Rectangle {
-                    width: 30px;
-                    height: 28px;
-                    border-radius: 14px;
-                    background: close-fp-touch.pressed ? #1c263c : Theme.surface;
+                    width: 28px;
+                    height: 26px;
+                    border-radius: 6px;
+                    background: close-fp-m.pressed ? #1c263c : Theme.surface;
                     border-width: 1px;
                     border-color: Theme.border;
-                    close-fp-touch := TouchArea {
+                    close-fp-m := TouchArea {
                         clicked => { root.close_file_picker(); }
                     }
-                    Text {
-                        text: "x";
-                        font-size: 12px;
-                        font-weight: 700;
-                        color: Theme.text-secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 10px;
+                            height: 1.5px;
+                            background: Theme.text-secondary;
+                            x: (parent.width - self.width) / 2;
+                        }
                     }
                 }
             }
@@ -797,37 +1055,39 @@ export component MobileApp inherits Window {
             if root.picker_files.length == 0 : VerticalLayout {
                 alignment: center;
                 vertical-stretch: 1;
-                spacing: 10px;
+                spacing: 12px;
                 Text {
-                    text: "No files found in Downloads or Pictures";
+                    text: "No files found in public storage";
                     font-size: 13px;
+                    font-weight: 600;
                     color: Theme.text-muted;
                     horizontal-alignment: center;
                 }
                 Text {
-                    text: "Place files in /Download or create a test file below";
+                    text: "Grant All Files Access in Android settings or create instant test file";
                     font-size: 11px;
                     color: Theme.text-faint;
                     horizontal-alignment: center;
                 }
                 Rectangle {
-                    width: 220px;
-                    height: 40px;
+                    width: 200px;
+                    height: 38px;
                     border-radius: Theme.radius-sm;
                     background: #0284c7;
                     border-width: 1px;
                     border-color: Theme.accent;
                     x: (parent.width - self.width) / 2;
-                    create-test-touch := TouchArea {
+                    create-test-btn := TouchArea {
                         clicked => { root.create_test_file(); }
                     }
                     HorizontalLayout {
                         alignment: center;
                         Text {
-                            text: "⚡ Create & Send Test File";
-                            font-size: 12px;
-                            font-weight: 700;
+                            text: "CREATE & BEAM TEST FILE";
+                            font-size: 10px;
+                            font-weight: 800;
                             color: #ffffff;
+                            letter-spacing: 0.8px;
                             vertical-alignment: center;
                         }
                     }
@@ -839,13 +1099,13 @@ export component MobileApp inherits Window {
                 VerticalLayout {
                     spacing: 6px;
                     for f in root.picker_files : Rectangle {
-                        background: fp-item-touch.pressed ? #162238 : fp-item-touch.has-hover ? #111a2c : Theme.surface;
+                        background: fp-item-m.pressed ? #16243d : fp-item-m.has-hover ? #111a2c : Theme.surface;
                         border-radius: Theme.radius-sm;
                         border-width: 1px;
                         border-color: Theme.border;
                         height: 48px;
 
-                        fp-item-touch := TouchArea {
+                        fp-item-m := TouchArea {
                             clicked => { root.file_selected(f.path); }
                         }
 
@@ -856,17 +1116,19 @@ export component MobileApp inherits Window {
                             alignment: center;
 
                             Rectangle {
-                                width: 28px;
-                                height: 28px;
+                                width: 26px;
+                                height: 26px;
                                 border-radius: 6px;
                                 background: #00d2ff18;
                                 border-width: 1px;
                                 border-color: #00d2ff44;
                                 y: (parent.height - self.height) / 2;
 
-                                Text {
-                                    text: "📄";
-                                    font-size: 12px;
+                                Rectangle {
+                                    width: 6px;
+                                    height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.accent;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                 }
@@ -891,7 +1153,7 @@ export component MobileApp inherits Window {
                             }
 
                             Rectangle {
-                                width: 60px;
+                                width: 56px;
                                 height: 26px;
                                 border-radius: 6px;
                                 background: #00d2ff18;
@@ -900,10 +1162,11 @@ export component MobileApp inherits Window {
                                 HorizontalLayout {
                                     alignment: center;
                                     Text {
-                                        text: "Beam";
-                                        font-size: 11px;
-                                        font-weight: 700;
+                                        text: "BEAM";
+                                        font-size: 10px;
+                                        font-weight: 800;
                                         color: Theme.accent;
+                                        letter-spacing: 0.5px;
                                         vertical-alignment: center;
                                     }
                                 }
