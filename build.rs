@@ -1,4 +1,10 @@
 fn main() {
+    // NDK r27 and earlier need explicit alignment for Android 16 KB pages.
+    // These affect Android binaries only; shared dependencies are linked statically.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rustc-link-arg=-Wl,-z,max-page-size=16384");
+        println!("cargo:rustc-link-arg=-Wl,-z,common-page-size=16384");
+    }
     slint_build::compile("ui/main.slint").unwrap();
 
     #[cfg(windows)]

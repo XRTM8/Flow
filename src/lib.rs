@@ -1,13 +1,20 @@
+pub mod app;
 pub mod clipboard;
-pub mod mobile_engine;
+pub mod platform;
 pub mod protocol;
+pub mod settings;
+mod ux;
+pub mod window_effects;
 
 slint::include_modules!();
 
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(app: slint::android::AndroidApp) {
-    let _ = slint::android::init(app);
+    if let Err(e) = slint::android::init(app) {
+        eprintln!("[Flow Android] UI initialization failed: {e}");
+        return;
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -20,7 +27,7 @@ fn android_main(app: slint::android::AndroidApp) {
     };
 
     let _guard = rt.enter();
-    if let Err(e) = mobile_engine::start_mobile_engine() {
+    if let Err(e) = app::run(true) {
         eprintln!("[Flow Android] Mobile engine error: {:?}", e);
     }
 }

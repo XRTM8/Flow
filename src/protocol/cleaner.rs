@@ -8,17 +8,17 @@ const TRACKING_PARAMS: &[&str] = &[
     "utm_campaign",
     "utm_term",
     "utm_content",
-    "si",          // YouTube share ID tracking
-    "fbclid",      // Facebook Click Identifier
-    "gclid",       // Google Click Identifier
-    "igshid",      // Instagram Share ID
-    "mc_cid",      // Mailchimp
+    "si",     // YouTube share ID tracking
+    "fbclid", // Facebook Click Identifier
+    "gclid",  // Google Click Identifier
+    "igshid", // Instagram Share ID
+    "mc_cid", // Mailchimp
     "mc_eid",
-    "_hsenc",      // HubSpot
+    "_hsenc", // HubSpot
     "_hsmi",
     "ref",
     "ref_src",
-    "spm",         // AliExpress
+    "spm", // AliExpress
 ];
 
 fn clean_single_url(url: &str) -> (String, bool) {
@@ -200,7 +200,10 @@ mod tests {
         let text = "Check out this link: https://youtu.be/dQw4w9WgXcQ?si=999888&t=10s it is great";
         let (cleaned, was_cleaned) = clean_text(text);
         assert!(was_cleaned);
-        assert_eq!(cleaned, "Check out this link: https://youtu.be/dQw4w9WgXcQ?t=10s it is great");
+        assert_eq!(
+            cleaned,
+            "Check out this link: https://youtu.be/dQw4w9WgXcQ?t=10s it is great"
+        );
     }
 
     #[test]
@@ -227,6 +230,9 @@ mod tests {
         let text = "Visit (https://store.example.com/item?id=99&fbclid=123) for details.";
         let (cleaned, was_cleaned) = clean_text(text);
         assert!(was_cleaned);
-        assert_eq!(cleaned, "Visit (https://store.example.com/item?id=99) for details.");
+        assert_eq!(
+            cleaned,
+            "Visit (https://store.example.com/item?id=99) for details."
+        );
     }
 }

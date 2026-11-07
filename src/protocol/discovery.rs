@@ -40,6 +40,58 @@ pub struct Peer {
 
 pub type PeerRegistry = Arc<RwLock<HashMap<String, Peer>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BeaconChange {
+    New,
+    EndpointChanged,
+    Seen,
+    Rejected,
+}
+
+impl BeaconChange {
+    fn needs_reply(self) -> bool {
+        matches!(self, Self::New | Self::EndpointChanged)
+    }
+}
+
+/// Refresh presence on every beacon, but answer only a newly discovered endpoint.
+/// Answering ordinary presence replies creates a UDP echo loop between two peers.
+fn register_beacon(
+    peers: &mut HashMap<String, Peer>,
+    self_id: &str,
+    beacon: &BeaconMessage,
+    ip: IpAddr,
+) -> BeaconChange {
+    if beacon.id == self_id || uuid::Uuid::parse_str(&beacon.id).is_err() || beacon.tcp_port == 0 {
+        return BeaconChange::Rejected;
+    }
+    let change = match peers.get(&beacon.id) {
+        Some(peer) if peer.ip != ip || peer.tcp_port != beacon.tcp_port => {
+            BeaconChange::EndpointChanged
+        }
+        Some(_) => BeaconChange::Seen,
+        None if peers.len() >= MAX_DISCOVERED_PEERS => return BeaconChange::Rejected,
+        None => BeaconChange::New,
+    };
+    peers.insert(
+        beacon.id.clone(),
+        Peer {
+            id: beacon.id.clone(),
+            name: beacon
+                .name
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(40)
+                .collect(),
+            device_type: beacon.device_type,
+            ip,
+            tcp_port: beacon.tcp_port,
+            last_seen: Instant::now(),
+        },
+    );
+    change
+}
+
 pub struct DiscoveryManager {
     pub self_id: String,
     pub self_name: String,
@@ -51,11 +103,21 @@ pub struct DiscoveryManager {
 impl DiscoveryManager {
     /// إنشاء مدير اكتشاف جديد بمعرف تلقائي
     pub fn new(self_name: String, self_type: DeviceType, tcp_port: u16) -> Self {
-        Self::with_id(uuid::Uuid::new_v4().to_string(), self_name, self_type, tcp_port)
+        Self::with_id(
+            uuid::Uuid::new_v4().to_string(),
+            self_name,
+            self_type,
+            tcp_port,
+        )
     }
 
     /// إنشاء مدير اكتشاف بمعرف دائم ومثبت على القرص
-    pub fn with_id(self_id: String, self_name: String, self_type: DeviceType, tcp_port: u16) -> Self {
+    pub fn with_id(
+        self_id: String,
+        self_name: String,
+        self_type: DeviceType,
+        tcp_port: u16,
+    ) -> Self {
         Self {
             self_id,
             self_name,
@@ -74,7 +136,8 @@ impl DiscoveryManager {
         sock.set_broadcast(true)?;
         sock.set_nonblocking(true)?;
 
-        let bind_addr: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DISCOVERY_PORT);
+        let bind_addr: SocketAddr =
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DISCOVERY_PORT);
         let _ = sock.bind(&bind_addr.into());
         // الانضمام لمجموعة البث المتعدد المحلية (Local Multicast Group) لتجاوز حظر الـ Broadcast في بعض الموجهات
         let _ = sock.join_multicast_v4(&Ipv4Addr::new(239, 255, 255, 250), &Ipv4Addr::UNSPECIFIED);
@@ -92,51 +155,42 @@ impl DiscoveryManager {
                 match listener_socket.recv_from(&mut buf).await {
                     Ok((len, src)) => {
                         if let Ok(beacon) = serde_json::from_slice::<BeaconMessage>(&buf[..len]) {
-                            if beacon.id != listener_self.self_id {
+                            let change = {
                                 let mut peers = listener_self.peers.write().await;
-                                // حظر تضخم الجدول لما يزيد عن 32 جهازا لمنع هجمات حجب الخدمة
-                                if peers.len() < MAX_DISCOVERED_PEERS || peers.contains_key(&beacon.id) {
-                                    let safe_name: String = beacon.name.chars().take(40).collect();
-                                    peers.insert(
-                                        beacon.id.clone(),
-                                        Peer {
-                                            id: beacon.id.clone(),
-                                            name: safe_name,
-                                            device_type: beacon.device_type,
-                                            ip: src.ip(),
-                                            tcp_port: beacon.tcp_port,
-                                            last_seen: Instant::now(),
-                                        },
-                                    );
-
-                                    // 1. إرسال رد Unicast فوري ومباشر على IP الهاتف لتخطي حظر الـ Broadcast
-                                    let reply = BeaconMessage {
-                                        id: listener_self.self_id.clone(),
-                                        name: listener_self.self_name.clone(),
-                                        device_type: listener_self.self_type,
-                                        tcp_port: listener_self.tcp_port,
-                                    };
-                                    if let Ok(bytes) = serde_json::to_vec(&reply) {
-                                        let target = SocketAddr::new(src.ip(), DISCOVERY_PORT);
-                                        let _ = listener_socket.send_to(&bytes, target).await;
-                                    }
-
-                                    // 2. إرسال TCP Discovery Ping مضمون لتخطي حظر موجهات الـ Wi-Fi
-                                    let target_tcp = SocketAddr::new(src.ip(), beacon.tcp_port);
-                                    let s_id = listener_self.self_id.clone();
-                                    let s_name = listener_self.self_name.clone();
-                                    let s_type = listener_self.self_type;
-                                    let s_port = listener_self.tcp_port;
-                                    tokio::spawn(async move {
-                                        let _ = super::transfer::TransferManager::send_tcp_ping(
-                                            target_tcp,
-                                            s_id,
-                                            s_name,
-                                            s_type,
-                                            s_port,
-                                        ).await;
-                                    });
+                                register_beacon(
+                                    &mut peers,
+                                    &listener_self.self_id,
+                                    &beacon,
+                                    src.ip(),
+                                )
+                            };
+                            // Release the registry before network I/O. Known peers are
+                            // refreshed above without replying to their own replies.
+                            if change.needs_reply() {
+                                // 1. إرسال رد Unicast فوري ومباشر على IP الهاتف لتخطي حظر الـ Broadcast
+                                let reply = BeaconMessage {
+                                    id: listener_self.self_id.clone(),
+                                    name: listener_self.self_name.clone(),
+                                    device_type: listener_self.self_type,
+                                    tcp_port: listener_self.tcp_port,
+                                };
+                                if let Ok(bytes) = serde_json::to_vec(&reply) {
+                                    let target = SocketAddr::new(src.ip(), DISCOVERY_PORT);
+                                    let _ = listener_socket.send_to(&bytes, target).await;
                                 }
+
+                                // 2. إرسال TCP Discovery Ping مضمون لتخطي حظر موجهات الـ Wi-Fi
+                                let target_tcp = SocketAddr::new(src.ip(), beacon.tcp_port);
+                                let s_id = listener_self.self_id.clone();
+                                let s_name = listener_self.self_name.clone();
+                                let s_type = listener_self.self_type;
+                                let s_port = listener_self.tcp_port;
+                                tokio::spawn(async move {
+                                    let _ = super::transfer::TransferManager::send_tcp_ping(
+                                        target_tcp, s_id, s_name, s_type, s_port,
+                                    )
+                                    .await;
+                                });
                             }
                         }
                     }
@@ -154,7 +208,10 @@ impl DiscoveryManager {
         tokio::spawn(async move {
             let broadcast_addrs = [
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT),
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(239, 255, 255, 250)), DISCOVERY_PORT),
+                SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(239, 255, 255, 250)),
+                    DISCOVERY_PORT,
+                ),
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 43, 255)), DISCOVERY_PORT),
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(172, 20, 10, 255)), DISCOVERY_PORT),
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 255)), DISCOVERY_PORT),
@@ -180,7 +237,9 @@ impl DiscoveryManager {
                 // إرسال Unicast دوري لجميع الأجهزة النشطة لضمان ثبات الاتصال على أندرويد
                 let known_ips: Vec<SocketAddr> = {
                     let p = sender_self.peers.read().await;
-                    p.values().map(|peer| SocketAddr::new(peer.ip, DISCOVERY_PORT)).collect()
+                    p.values()
+                        .map(|peer| SocketAddr::new(peer.ip, DISCOVERY_PORT))
+                        .collect()
                 };
                 for target_ip in known_ips {
                     let _ = sender_socket.send_to(&payload, target_ip).await;
@@ -225,6 +284,82 @@ pub fn get_or_create_device_id(storage_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_presence_does_not_trigger_a_reply_loop() {
+        let self_id = uuid::Uuid::new_v4().to_string();
+        let mut beacon = BeaconMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Phone".into(),
+            device_type: DeviceType::Mobile,
+            tcp_port: 54125,
+        };
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10));
+        let mut peers = HashMap::new();
+        assert!(register_beacon(&mut peers, &self_id, &beacon, ip).needs_reply());
+        peers.get_mut(&beacon.id).unwrap().last_seen = Instant::now() - PEER_TIMEOUT;
+        for _ in 0..100 {
+            assert_eq!(
+                register_beacon(&mut peers, &self_id, &beacon, ip),
+                BeaconChange::Seen
+            );
+        }
+        assert!(peers[&beacon.id].last_seen.elapsed() < Duration::from_secs(1));
+        beacon.tcp_port += 1;
+        assert_eq!(
+            register_beacon(&mut peers, &self_id, &beacon, ip),
+            BeaconChange::EndpointChanged
+        );
+        assert!(!register_beacon(&mut peers, &self_id, &beacon, ip).needs_reply());
+    }
+
+    #[test]
+    fn discovery_rejects_invalid_beacons_and_bounds_new_peers() {
+        let self_id = uuid::Uuid::new_v4().to_string();
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let mut peers = HashMap::new();
+        let mut beacon = BeaconMessage {
+            id: "not-a-device-id".into(),
+            name: "Phone".into(),
+            device_type: DeviceType::Mobile,
+            tcp_port: 54125,
+        };
+        assert_eq!(
+            register_beacon(&mut peers, &self_id, &beacon, ip),
+            BeaconChange::Rejected
+        );
+        beacon.id = self_id.clone();
+        assert_eq!(
+            register_beacon(&mut peers, &self_id, &beacon, ip),
+            BeaconChange::Rejected
+        );
+        beacon.id = uuid::Uuid::new_v4().to_string();
+        beacon.tcp_port = 0;
+        assert_eq!(
+            register_beacon(&mut peers, &self_id, &beacon, ip),
+            BeaconChange::Rejected
+        );
+        beacon.tcp_port = 54125;
+        for _ in 0..MAX_DISCOVERED_PEERS {
+            beacon.id = uuid::Uuid::new_v4().to_string();
+            assert_eq!(
+                register_beacon(&mut peers, &self_id, &beacon, ip),
+                BeaconChange::New
+            );
+        }
+        let known_id = beacon.id.clone();
+        beacon.id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            register_beacon(&mut peers, &self_id, &beacon, ip),
+            BeaconChange::Rejected
+        );
+        beacon.id = known_id;
+        assert_eq!(
+            register_beacon(&mut peers, &self_id, &beacon, ip),
+            BeaconChange::Seen
+        );
+        assert_eq!(peers.len(), MAX_DISCOVERED_PEERS);
+    }
 
     #[test]
     fn test_persistent_device_id() {

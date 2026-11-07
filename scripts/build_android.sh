@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
-# FLOW by Otium - Android APK Automated Build Script (Bash)
-# 100% Pure Rust cross-compilation using cargo-apk & Slint
-
-set -e
-
-echo "========================================="
-echo "  FLOW by Otium - Android Build Pipeline"
-echo "========================================="
-
-# 1. Check for cargo-apk
-if ! command -v cargo-apk &> /dev/null; then
-    echo "[!] cargo-apk not found. Installing via cargo..."
-    cargo install cargo-apk
+set -euo pipefail
+cd "$(dirname "$0")/.."
+profile=debug
+universal=false
+for arg in "$@"; do
+  case "$arg" in
+    --release) profile=release ;;
+    --universal) universal=true ;;
+    *) echo "Usage: $0 [--release] [--universal]" >&2; exit 2 ;;
+  esac
+done
+args=(apk build --lib)
+if [[ "$universal" == false ]]; then args+=(--target aarch64-linux-android); fi
+if [[ "$profile" == release ]]; then args+=(--release); fi
+command -v cargo-apk >/dev/null || { echo 'Install cargo-apk first; see README.md.' >&2; exit 1; }
+[[ -n "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" ]] || { echo 'Configure the Android SDK first.' >&2; exit 1; }
+if [[ "$profile" == release ]]; then
+  : "${CARGO_APK_RELEASE_KEYSTORE:?Set the existing release keystore path}"
+  : "${CARGO_APK_RELEASE_KEYSTORE_PASSWORD:?Set its password in the build environment}"
 fi
-
-# 2. Add ARM64 Android Target
-echo "[*] Adding aarch64-linux-android target..."
-rustup target add aarch64-linux-android
-
-# 3. Compile APK
-echo "[*] Compiling FLOW for Android (Release mode)..."
-cargo apk build --release
-
-echo "========================================="
-echo "  Build Successful! Output APK:"
-echo "  target/release/apk/otium-flow.apk"
-echo "========================================="
+cargo "${args[@]}"
+test -f "target/$profile/apk/otium_flow.apk"
+printf '%s\n' "$PWD/target/$profile/apk/otium_flow.apk"

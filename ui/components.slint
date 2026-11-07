@@ -1,0 +1,231 @@
+import { ScrollView } from "std-widgets.slint";
+import { AppState } from "state.slint";
+import { Theme } from "theme.slint";
+import { PeerItem, TransferItem, HistoryItem } from "models.slint";
+
+export component FlowRow inherits FlexboxLayout {
+    flex-direction: AppState.rtl ? row-reverse : row;
+    flex-wrap: no-wrap; alignment: stretch;
+    cross-axis-alignment: center; spacing: 12px;
+    @children
+}
+export component BodyText inherits Text {
+    color: Theme.text;
+    font-size: AppState.rtl ? 16px : 15px;
+    horizontal-alignment: AppState.rtl ? right : left;
+    wrap: word-wrap;
+}
+export component SmallText inherits BodyText {
+    font-size: AppState.rtl ? 14px : 13px;
+    color: Theme.secondary;
+}
+export component SectionTitle inherits BodyText {
+    color: Theme.heading;
+    font-size: AppState.rtl ? 19px : 18px;
+    font-weight: 600;
+}
+export component Separator inherits Rectangle {
+    height: 1px; background: Theme.border;
+}
+export component Panel inherits Rectangle {
+    background: Theme.surface;
+    border-width: 1px; border-color: Theme.edge;
+    border-radius: Theme.radius;
+    drop-shadow-offset-y: 5px; drop-shadow-blur: 18px;
+    drop-shadow-color: Theme.shadow;
+    @children
+}
+export component FlowButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <bool> selected: false;
+    callback clicked();
+    min-width: button-layout.min-width;
+    min-height: AppState.mobile_mode ? 48px : 40px;
+    horizontal-stretch: 0; vertical-stretch: 0;
+    border-radius: 9px;
+    background: !enabled ? Theme.disabled : primary ? (touch.pressed ? Theme.primary_pressed : touch.has-hover ? Theme.primary_hover : Theme.primary) : touch.pressed ? Theme.pressed : selected ? Theme.accent_soft : touch.has-hover ? Theme.hover : quiet ? transparent : Theme.subtle;
+    border-width: quiet && !selected ? 0px : 1px;
+    border-color: primary && enabled ? Theme.primary_border : selected ? Theme.edge : Theme.border;
+    forward-focus: keyboard;
+    accessible-role: button; accessible-label: text; accessible-enabled: enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    button-layout := FlowRow {
+        padding-left: 14px; padding-right: 14px;
+        spacing: 8px; alignment: center;
+        if root.icon.width > 0 : Image {
+            source: root.icon; width: 18px; height: 18px;
+            colorize: !root.enabled ? Theme.disabled_text : root.primary ? Theme.on_primary : root.danger ? Theme.error : Theme.secondary;
+            accessible-role: none;
+        }
+        Text {
+            text: root.text;
+            color: !root.enabled ? Theme.disabled_text : root.primary ? Theme.on_primary : root.danger ? Theme.error : Theme.text;
+            font-size: AppState.rtl ? 15px : 14px;
+            font-weight: root.primary || root.selected ? 600 : 500;
+            vertical-alignment: center; horizontal-alignment: center;
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { keyboard.focus(); root.clicked(); }
+    }
+    keyboard := FocusScope {
+        width: 0px; height: 0px; enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    if keyboard.has-focus : Rectangle {
+        x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px;
+        border-radius: 11px; border-width: 2px;
+        border-color: Theme.focus; background: transparent;
+    }
+}
+export component TextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> multiline: true;
+    in property <bool> read_only: false;
+    // Codes and file paths retain their reading direction in Arabic layouts.
+    in property <bool> secret: false;
+    in property <string> label;
+    min-height: multiline ? 104px : 46px;
+    background: Theme.field; border-width: 1px;
+    border-color: input.has-focus ? Theme.focus : Theme.border;
+    border-radius: 9px; forward-focus: input;
+    if root.text == "" : BodyText {
+        x: 13px; y: 11px; width: parent.width - 26px;
+        text: root.placeholder; color: Theme.muted;
+        font-size: AppState.rtl ? 16px : 14px;
+    }
+    ScrollView {
+        x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 20px;
+        input := TextInput {
+            text <=> root.text;
+            single-line: !root.multiline; wrap: word-wrap;
+            read-only: root.read_only;
+            font-size: AppState.rtl && !root.secret ? 16px : 14px;
+            color: Theme.text;
+            horizontal-alignment: AppState.rtl && !root.secret ? right : left;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.on_selection;
+            height: max(self.preferred-height, parent.height); width: parent.width;
+            accessible-label: root.label; accessible-placeholder-text: root.placeholder;
+        }
+    }
+}
+export component DeviceRow inherits Rectangle {
+    in property <PeerItem> item;
+    vertical-stretch: 0;
+    border-radius: 10px; border-width: item.selected ? 1px : 0px;
+    background: item.selected ? Theme.accent_soft : transparent;
+    border-color: Theme.edge;
+    device-content := FlowRow {
+        padding: 12px;
+        Image {
+            source: root.item.kind == "mobile" ? @image-url("../assets/icons/smartphone.svg") : @image-url("../assets/icons/monitor.svg");
+            width: 24px; height: 24px; colorize: Theme.secondary;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1; spacing: 3px;
+            BodyText { text: root.item.name; font-weight: 600; overflow: elide; wrap: no-wrap; }
+            SmallText { text: root.item.trusted ? (AppState.rtl ? "مقترن" : "Paired") : (AppState.rtl ? "يحتاج إلى اقتران" : "Pairing required"); }
+        }
+        FlowButton {
+            text: root.item.selected && !root.item.trusted ? (AppState.rtl ? "اقتران" : "Pair") : root.item.selected ? (AppState.rtl ? "محدد" : "Selected") : (AppState.rtl ? "اختيار" : "Select");
+            selected: root.item.selected;
+            enabled: !AppState.busy && (!root.item.selected || !root.item.trusted);
+            clicked => {
+                AppState.show_devices = false;
+                if (root.item.selected && !root.item.trusted) { AppState.show_pairing = true; }
+                else { AppState.select_peer(root.item.id); }
+            }
+        }
+    }
+}
+export component TransferRow inherits Rectangle {
+    in property <TransferItem> item;
+    vertical-stretch: 0;
+    transfer-content := VerticalLayout {
+        padding-top: 12px; padding-bottom: 12px; spacing: 9px;
+        FlowRow {
+            Image {
+                source: @image-url("../assets/icons/file-up.svg"); width: 20px; height: 20px;
+                colorize: root.item.status == "failed" ? Theme.error : Theme.secondary;
+                transform-rotation: root.item.direction == "receive" ? 180deg : 0deg;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 3px;
+                BodyText { text: root.item.title; font-weight: 600; overflow: elide; wrap: no-wrap; }
+                SmallText { text: root.item.detail; }
+            }
+            if root.item.can_cancel : FlowButton {
+                text: AppState.rtl ? "إلغاء" : "Cancel"; quiet: true;
+                clicked => { AppState.cancel_transfer(root.item.id); }
+            }
+            if root.item.direction != "receive" && !root.item.can_cancel && (root.item.status == "failed" || root.item.status == "cancelled" || root.item.status == "error") : FlowButton {
+                text: AppState.rtl ? "إعادة" : "Retry"; quiet: true;
+                clicked => { AppState.retry_transfer(root.item.id); }
+            }
+        }
+        Rectangle {
+            height: 4px; border-radius: 2px; background: Theme.border;
+            Rectangle {
+                x: AppState.rtl ? parent.width - self.width : 0px;
+                height: parent.height; width: parent.width * min(1, max(0, root.item.progress));
+                border-radius: 2px; background: root.item.status == "failed" ? Theme.error : Theme.accent_fill;
+            }
+        }
+    }
+}
+export component HistoryRow inherits Rectangle {
+    in property <HistoryItem> item;
+    in property <bool> compact: false;
+    vertical-stretch: 0;
+    history-content := FlowRow {
+        padding-top: 12px; padding-bottom: 12px;
+        Image {
+            source: root.item.success ? (root.item.kind == "file" ? @image-url("../assets/icons/file-up.svg") : @image-url("../assets/icons/send.svg")) : @image-url("../assets/icons/x.svg");
+            width: 18px; height: 18px;
+            colorize: root.item.success ? Theme.secondary : Theme.error;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1; spacing: 3px;
+            BodyText { text: root.item.title; font-weight: 500; overflow: elide; wrap: no-wrap; }
+            if !root.compact : SmallText { text: root.item.subtitle; overflow: elide; wrap: no-wrap; }
+            SmallText { text: root.item.timestamp; font-size: AppState.rtl ? 13px : 12px; color: Theme.muted; }
+        }
+        if root.item.action_label != "" : FlowButton {
+            text: root.item.action_label; quiet: true;
+            clicked => { AppState.history_action(root.item.id); }
+        }
+    }
+    Separator { y: parent.height - 1px; }
+}
+export component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in-out property <bool> value;
+    vertical-stretch: 0;
+    setting-content := FlowRow {
+        padding-top: 14px; padding-bottom: 14px;
+        spacing: 16px;
+        VerticalLayout {
+            horizontal-stretch: 1; spacing: 4px;
+            BodyText { text: root.title; font-weight: 500; }
+            SmallText { text: root.description; }
+        }
+        FlowButton {
+            text: root.value ? (AppState.rtl ? "مفعّل" : "On") : (AppState.rtl ? "متوقف" : "Off");
+            selected: root.value; min-width: 64px;
+            clicked => { root.value = !root.value; AppState.save_settings(); }
+        }
+    }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "otium-flow"
-version = "2.4.0"
+version = "2.4.2"
 edition = "2021"
 default-run = "otium-flow-app"
 
@@ -23,7 +23,7 @@ sha2 = "0.11.1"
 socket2 = "0.6.5"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-slint = "1.18"
+slint = { version = "~1.18", features = ["unstable-winit-030"] }
 rfd = "0.17.2"
 arboard = "3.4"
 
@@ -31,6 +31,9 @@ arboard = "3.4"
 slint = { version = "1.18", default-features = false, features = ["compat-1-2", "backend-android-activity-06", "renderer-femtovg"] }
 jni = "0.21"
 ndk-context = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [build-dependencies]
 slint-build = "1.18"
@@ -43,18 +46,13 @@ package = "org.otium.flow"
 label = "FLOW by Otium"
 icon = "@mipmap/ic_launcher"
 resources = "res"
+assets = "assets/android"
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 
 [package.metadata.android.application]
 label = "FLOW by Otium"
 icon = "@mipmap/ic_launcher"
-request_legacy_external_storage = true
-
-[package.metadata.android.signing.release]
-path = "flow.keystore"
-keystore_password = "otiumflow123"
-key_alias = "flowkey"
-key_password = "otiumflow123"
+theme = "@android:style/Theme.Material.NoActionBar"
 
 [package.metadata.android.sdk]
 min_sdk_version = 26

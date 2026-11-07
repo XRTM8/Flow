@@ -17,14 +17,23 @@ impl ClipboardManager {
 
     /// قراءة محتوى الحافظة الحالي
     pub fn read_current() -> Option<String> {
+        Self::try_read_current().ok().flatten()
+    }
+
+    /// Explicit reads preserve OS failures so the UI can explain them.
+    pub fn try_read_current() -> Result<Option<String>, String> {
         #[cfg(not(target_os = "android"))]
         {
-            let mut clipboard = Clipboard::new().ok()?;
-            clipboard.get_text().ok()
+            let mut clipboard = Clipboard::new().map_err(|error| error.to_string())?;
+            match clipboard.get_text() {
+                Ok(text) => Ok(Some(text)),
+                Err(arboard::Error::ContentNotAvailable) => Ok(None),
+                Err(error) => Err(error.to_string()),
+            }
         }
         #[cfg(target_os = "android")]
         {
-            None
+            crate::platform::android::read_clipboard()
         }
     }
 
@@ -52,13 +61,17 @@ impl ClipboardManager {
         }
         #[cfg(target_os = "android")]
         {
-            let _ = text;
-            Ok(())
+            crate::platform::android::copy_text(text)
+                .map_err(|error| std::io::Error::other(error).into())
         }
     }
 
     /// تعيين صورة في الحافظة
-    pub fn set_image(width: usize, height: usize, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn set_image(
+        width: usize,
+        height: usize,
+        data: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(target_os = "android"))]
         {
             let mut clipboard = Clipboard::new()?;
@@ -72,7 +85,11 @@ impl ClipboardManager {
         #[cfg(target_os = "android")]
         {
             let _ = (width, height, data);
-            Ok(())
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Image clipboard copying is not supported on Android; send it as a file instead",
+            )
+            .into())
         }
     }
 
@@ -116,6 +133,10 @@ impl ClipboardManager {
 
         #[cfg(target_os = "android")]
         {
+            // Android restricts clipboard reads to a focused app. Explicit
+            // Paste uses try_read_current; do not poll in the background or
+            // claim that phone clipboard monitoring is active.
+            running.store(false, Ordering::SeqCst);
             let _ = tx;
         }
     }

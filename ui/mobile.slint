@@ -1,810 +1,117 @@
-import { Theme } from "theme.slint";
-import { HistoryItem, FilePickerItem } from "models.slint";
 import { ScrollView } from "std-widgets.slint";
+import { AppState } from "state.slint";
+import { Theme } from "theme.slint";
+import { FlowRow, FlowButton, BodyText, SmallText, SectionTitle, Separator, Panel, TextField } from "components.slint";
 
-export component MobileApp inherits Window {
-    title: "Otium Flow";
-    background: Theme.bg-gradient;
-    default-font-family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-
-    // مسافات الأمان للشاشات الحديثة (Notch & Home Indicator)
-    in-out property <length> safe_area_top: 48px;
-    in-out property <length> safe_area_bottom: 34px;
-
-    in-out property <int> active_tab_index: 0;
-    in-out property <string> peer_name: "Scanning Wi-Fi...";
-    in-out property <bool> is_connected: false;
-    in-out property <string> last_received_text: "No text received yet";
-    in-out property <bool> text_cleaned: false;
-    in-out property <bool> transfer_active: false;
-    in-out property <string> transfer_name: "";
-    in-out property <float> transfer_progress: 0.0;
-    in-out property <string> transfer_status: "";
-    in-out property <bool> show_history: false;
-    in-out property <[HistoryItem]> history_items: [];
-    in-out property <bool> clipboard_copied: false;
-    in-out property <bool> clipboard_pushed: false;
-    in-out property <string> sas_code: "";
-    in-out property <bool> update_available: false;
-    in-out property <string> update_version: "";
-    in-out property <bool> update_in_progress: false;
-
-    // منتقي الملفات داخل التطبيق
-    in-out property <bool> show_file_picker: false;
-    in-out property <[FilePickerItem]> picker_files: [];
-    in-out property <string> file_filter: "all";
-
-    // محرر الملاحظات والنصوص المباشر
-    in-out property <string> draft_text: "";
-    in-out property <bool> text_sent: false;
-    in-out property <string> lang: "EN"; // "EN" or "AR"
-
-    callback share_file_clicked();
-    callback push_clipboard_clicked();
-    callback copy_received_clicked();
-    callback toggle_history();
-    callback clear_history();
-    callback cancel_transfer_clicked();
-    callback apply_update_clicked();
-    callback file_selected(string);
-    callback close_file_picker();
-    callback create_test_file();
-    callback send_custom_text(string);
-    callback paste_to_draft();
-    callback clear_draft();
-    callback open_system_picker_clicked();
-    callback open_storage_settings_clicked();
-
+export component PairingPane inherits ScrollView {
     VerticalLayout {
-        padding-top: root.safe_area_top + 4px;
-        padding-bottom: root.safe_area_bottom + 8px;
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 12px;
-
-        // 1. الشريط العلوي النقي (Top Minimalist Header)
-        HorizontalLayout {
-            alignment: space-between;
-            height: 36px;
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: center;
-
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 8px;
-                    background: Theme.card-gradient;
-                    border-width: 1px;
-                    border-color: Theme.border-gradient;
-
-                    Image {
-                        source: @image-url("../assets/icons/wifi.svg");
-                        width: 15px;
-                        height: 15px;
-                        colorize: root.is_connected ? Theme.status-online : Theme.accent;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: center;
-
-                    Text {
-                        text: "FLOW";
-                        font-size: 15px;
-                        font-weight: 800;
-                        color: Theme.text-primary;
-                        letter-spacing: 2px;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        width: 1px;
-                        height: 12px;
-                        background: Theme.border-subtle;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    Text {
-                        text: "OTIUM";
-                        font-size: 10px;
-                        font-weight: 700;
-                        color: Theme.text-muted;
-                        letter-spacing: 1px;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            // أدوات الحالة واللغة والسجل
-            HorizontalLayout {
-                spacing: 6px;
-                alignment: center;
-
-                // زر التحديث إن وجد
-                if root.update_available : Rectangle {
-                    background: update-m-btn.pressed ? #3b82f644 : #3b82f618;
-                    border-width: 1px;
-                    border-color: #3b82f666;
-                    border-radius: 14px;
-                    height: 28px;
-                    update-m-btn := TouchArea {
-                        clicked => { root.apply_update_clicked(); }
-                    }
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 4px;
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icons/refresh.svg");
-                            width: 11px;
-                            height: 11px;
-                            colorize: #60a5fa;
-                        }
-                        Text {
-                            text: root.update_in_progress ? "UPDATING" : "UPDATE";
-                            font-size: 9px;
-                            font-weight: 700;
-                            color: #60a5fa;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // زر فتح السجل
-                Rectangle {
-                    background: hist-m-btn.pressed ? #1c263c : root.show_history ? #16243d : Theme.card-gradient;
-                    border-width: 1px;
-                    border-color: root.show_history ? Theme.border-focus : Theme.border-gradient;
-                    border-radius: 14px;
-                    height: 28px;
-                    hist-m-btn := TouchArea {
-                        clicked => { root.show_history = !root.show_history; }
-                    }
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 4px;
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icons/history.svg");
-                            width: 12px;
-                            height: 12px;
-                            colorize: root.show_history ? Theme.accent : Theme.text-secondary;
-                        }
-                        if root.history_items.length > 0 : Text {
-                            text: "" + root.history_items.length;
-                            font-size: 9px;
-                            font-weight: 800;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // زر تبديل اللغة
-                Rectangle {
-                    background: lang-m-btn.pressed ? #1c263c : Theme.card-gradient;
-                    border-width: 1px;
-                    border-color: Theme.border-gradient;
-                    border-radius: 14px;
-                    height: 28px;
-                    lang-m-btn := TouchArea {
-                        clicked => { root.lang = root.lang == "EN" ? "AR" : "EN"; }
-                    }
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        alignment: center;
-                        Text {
-                            text: root.lang == "EN" ? "AR" : "EN";
-                            font-size: 9px;
-                            font-weight: 800;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
+        padding: AppState.mobile_mode ? 16px : 24px; spacing: 18px;
+        FlowRow {
+            SectionTitle { text: AppState.rtl ? "اقتران جهاز" : "Pair a device"; font-size: 21px; horizontal-stretch: 1; }
+            FlowButton { text: AppState.rtl ? "رجوع" : "Back"; quiet: true; clicked => { AppState.show_pairing = false; } }
         }
-
-        // 2. بطاقة تتبع النقل اللحظي (HUD Transfer Telemetry)
-        if root.transfer_active : Rectangle {
-            background: Theme.card-gradient;
-            border-width: 1px;
-            border-color: Theme.accent;
-            border-radius: Theme.radius-sm;
-            height: 52px;
-
+        if AppState.selected_peer_id == "" : Panel {
             VerticalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                padding-top: 6px;
-                padding-bottom: 6px;
-                spacing: 5px;
-
-                HorizontalLayout {
-                    alignment: space-between;
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icons/file-up.svg");
-                            width: 14px;
-                            height: 14px;
-                            colorize: Theme.accent;
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            Text {
-                                text: root.transfer_name;
-                                font-size: 11px;
-                                font-weight: 600;
-                                color: Theme.text-primary;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: root.transfer_status;
-                                font-size: 9px;
-                                color: Theme.accent;
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: center;
-                        Text {
-                            text: Math.round(root.transfer_progress * 100) + "%";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                        Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            border-radius: 5px;
-                            background: #1c263c;
-                            cancel-m-btn := TouchArea {
-                                clicked => { root.cancel_transfer_clicked(); }
-                            }
-                            Image {
-                                source: @image-url("../assets/icons/x.svg");
-                                width: 10px;
-                                height: 10px;
-                                colorize: Theme.status-error;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    height: 3px;
-                    border-radius: 1.5px;
-                    background: Theme.recessed;
-                    Rectangle {
-                        x: 0;
-                        y: 0;
-                        height: parent.height;
-                        width: parent.width * root.transfer_progress;
-                        border-radius: 1.5px;
-                        background: Theme.beam-gradient;
-                        animate width { duration: 100ms; easing: ease-out; }
-                    }
-                }
+                padding: 22px; spacing: 16px;
+                BodyText { text: AppState.rtl ? "اختر الجهاز الذي تريد الاقتران به أولًا." : "Choose the device you want to pair with first."; }
+                FlowButton { text: AppState.rtl ? "الأجهزة القريبة" : "Nearby devices"; primary: true; clicked => { AppState.show_pairing = false; AppState.show_devices = true; } }
             }
         }
-
-        // 3. بطاقة الجهاز المتصل والرادار (Connected Device Radar Card)
-        Rectangle {
-            background: Theme.card-gradient;
-            border-width: 1px;
-            border-color: root.is_connected ? #10b98155 : Theme.border-gradient;
-            border-radius: Theme.radius-sm;
-            height: 48px;
-
-            HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: 10px;
-                    alignment: center;
-
-                    // دائرة الرادار اللحظية
-                    Rectangle {
-                        width: 10px;
-                        height: 10px;
-                        border-radius: 5px;
-                        background: root.is_connected ? Theme.status-online : Theme.status-waiting;
-                        border-width: 1px;
-                        border-color: root.is_connected ? #10b98188 : #f59e0b88;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    Image {
-                        source: @image-url("../assets/icons/monitor.svg");
-                        width: 15px;
-                        height: 15px;
-                        colorize: root.is_connected ? Theme.text-primary : Theme.text-muted;
-                        vertical-alignment: center;
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 1px;
-                        Text {
-                            text: root.peer_name;
-                            font-size: 12px;
-                            font-weight: 700;
-                            color: Theme.text-primary;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: root.is_connected ? "ChaCha20-Poly1305 E2EE Active" : "Scanning local Wi-Fi subnet...";
-                            font-size: 9px;
-                            color: root.is_connected ? Theme.status-shield : Theme.text-muted;
-                        }
-                    }
-                }
-
-                if root.is_connected && root.sas_code != "" : Rectangle {
-                    background: #10b98118;
-                    border-radius: 4px;
-                    height: 22px;
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 4px;
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icons/shield.svg");
-                            width: 11px;
-                            height: 11px;
-                            colorize: Theme.status-shield;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: "#" + root.sas_code;
-                            font-size: 9px;
-                            font-weight: 800;
-                            color: Theme.status-shield;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. المحور المركزي الموحد: منصة الإرسال المباشر (Direct Beam & Files Deck)
-        // تجمع إرسال النصوص والملفات في شاشة واحدة متكاملة
-        Rectangle {
-            background: Theme.card-gradient;
-            border-width: 1px;
-            border-color: omni-m-input.has-focus ? Theme.border-focus : Theme.border-gradient;
-            border-radius: Theme.radius-md;
-            vertical-stretch: 1;
-
+        if AppState.selected_peer_id != "" : Panel {
             VerticalLayout {
-                padding: 14px;
-                spacing: 10px;
-
-                HorizontalLayout {
-                    alignment: space-between;
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icons/send.svg");
-                            width: 13px;
-                            height: 13px;
-                            colorize: Theme.accent;
-                        }
-                        Text {
-                            text: root.lang == "AR" ? "إرسال نص أو رسالة فورية" : "DIRECT NOTE BEAM";
-                            font-size: 10px;
-                            font-weight: 700;
-                            color: Theme.text-primary;
-                            letter-spacing: 1px;
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Rectangle {
-                            background: p-m-btn.pressed ? #1c263c : #0a0e18;
-                            border-width: 1px;
-                            border-color: Theme.border-subtle;
-                            border-radius: 5px;
-                            height: 24px;
-                            p-m-btn := TouchArea {
-                                clicked => { root.paste_to_draft(); }
-                            }
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                spacing: 4px;
-                                alignment: center;
-                                Image {
-                                    source: @image-url("../assets/icons/copy.svg");
-                                    width: 10px;
-                                    height: 10px;
-                                    colorize: Theme.text-secondary;
-                                }
-                                Text {
-                                    text: root.lang == "AR" ? "لصق" : "Paste";
-                                    font-size: 9px;
-                                    font-weight: 600;
-                                    color: Theme.text-secondary;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        if root.draft_text != "" : Rectangle {
-                            background: clr-m-btn.pressed ? #f43f5e33 : #0a0e18;
-                            border-width: 1px;
-                            border-color: #f43f5e55;
-                            border-radius: 5px;
-                            height: 24px;
-                            clr-m-btn := TouchArea {
-                                clicked => { root.clear_draft(); }
-                            }
-                            HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
-                                alignment: center;
-                                Image {
-                                    source: @image-url("../assets/icons/trash.svg");
-                                    width: 10px;
-                                    height: 10px;
-                                    colorize: Theme.status-error;
-                                }
-                            }
-                        }
-                    }
+                padding: 22px; spacing: 16px;
+                FlowRow {
+                    Image { source: @image-url("../assets/icons/monitor.svg"); width: 24px; height: 24px; colorize: Theme.secondary; }
+                    BodyText { text: AppState.peer_name; font-weight: 600; horizontal-stretch: 1; }
+                    FlowButton { text: AppState.rtl ? "تغيير" : "Change"; quiet: true; clicked => { AppState.show_pairing = false; AppState.show_devices = true; } }
                 }
-
-                // حقل كتابة الملاحظات على الهاتف
-                Rectangle {
-                    background: Theme.recessed-gradient;
-                    border-radius: Theme.radius-sm;
-                    border-width: 1px;
-                    border-color: omni-m-input.has-focus ? #00d2ff55 : Theme.border-subtle;
-                    vertical-stretch: 1;
-
-                    if root.draft_text == "" : Text {
-                        text: root.lang == "AR" ? "اكتب أي نص أو رابط أو كود، أو اختر إرسال ملفات بالأسفل..." : "Type note, link, snippet or tap send files below...";
-                        font-size: 12px;
-                        color: Theme.text-faint;
-                        wrap: word-wrap;
-                        x: 12px;
-                        y: 10px;
-                        width: parent.width - 24px;
-                    }
-
-                    omni-m-input := TextInput {
-                        text <=> root.draft_text;
-                        single-line: false;
-                        wrap: word-wrap;
-                        font-size: 12px;
-                        color: Theme.text-primary;
-                        selection-background-color: #00d2ff44;
-                        selection-foreground-color: #ffffff;
-                        x: 12px;
-                        y: 10px;
-                        width: parent.width - 24px;
-                        height: parent.height - 20px;
-                    }
+                Separator { }
+                FlowRow {
+                    BodyText { text: AppState.rtl ? "رمز هذا الجهاز" : "This device’s code"; font-weight: 600; horizontal-stretch: 1; }
+                    FlowButton { text: AppState.rtl ? "نسخ" : "Copy"; icon: @image-url("../assets/icons/copy.svg"); quiet: true; enabled: AppState.pairing_code != ""; clicked => { AppState.copy_pairing_code(); } }
                 }
-
-                // الزران الأساسيان العملاقان (أجهزة اللمس)
-                VerticalLayout {
-                    spacing: 8px;
-
-                    // زر إرسال الملفات والصور الأصلي عبر نظام أندرويد (SAF Picker)
-                    Rectangle {
-                        background: file-m-touch.pressed ? #047857 : Theme.file-gradient;
-                        border-radius: Theme.radius-sm;
-                        height: 48px;
-
-                        file-m-touch := TouchArea {
-                            clicked => { root.open_system_picker_clicked(); }
-                        }
-
-                        HorizontalLayout {
-                            alignment: center;
-                            spacing: 8px;
-
-                            Image {
-                                source: @image-url("../assets/icons/file-up.svg");
-                                width: 16px;
-                                height: 16px;
-                                colorize: #ffffff;
-                            }
-
-                            Text {
-                                text: root.lang == "AR" ? "إرسال ملفات أو صور من الجهاز" : "SEND FILES OR PHOTOS";
-                                font-size: 12px;
-                                font-weight: 800;
-                                color: #ffffff;
-                                letter-spacing: 0.8px;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-
-                    // زر إرسال النص اللحظي للكمبيوتر
-                    Rectangle {
-                        background: beam-m-touch.pressed ? #0284c7 : Theme.beam-gradient;
-                        border-radius: Theme.radius-sm;
-                        height: 44px;
-
-                        beam-m-touch := TouchArea {
-                            clicked => { root.send_custom_text(root.draft_text); }
-                        }
-
-                        HorizontalLayout {
-                            alignment: center;
-                            spacing: 8px;
-
-                            Image {
-                                source: @image-url("../assets/icons/send.svg");
-                                width: 15px;
-                                height: 15px;
-                                colorize: #ffffff;
-                            }
-
-                            Text {
-                                text: root.text_sent ? (root.lang == "AR" ? "تم الإرسال للكمبيوتر" : "SENT TO PC") : (root.lang == "AR" ? "إرسال النص إلى الكمبيوتر" : "BEAM NOTE TO PC");
-                                font-size: 12px;
-                                font-weight: 800;
-                                color: #ffffff;
-                                letter-spacing: 0.8px;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
+                TextField { text: AppState.pairing_code; read_only: true; secret: true; label: AppState.rtl ? "رمز استقبال هذا الجهاز" : "This device’s receiving code"; min-height: 88px; }
+                SmallText { text: AppState.rtl ? "الصقه في Flow على الجهاز الآخر. احتفظ بالرمز بين أجهزتك." : "Paste this into Flow on your other device. Keep the code between your devices."; }
+                Separator { }
+                FlowRow {
+                    BodyText { text: AppState.rtl ? "رمز الجهاز الآخر" : "Other device’s code"; font-weight: 600; horizontal-stretch: 1; }
+                    FlowButton { text: AppState.rtl ? "لصق" : "Paste"; quiet: true; enabled: !AppState.pairing_busy; clicked => { AppState.paste_pairing_code(); } }
                 }
-            }
-        }
-
-        // 5. بطاقة المحتوى المستلم على الهاتف (Received on this Device)
-        Rectangle {
-            background: Theme.card-gradient;
-            border-width: 1px;
-            border-color: Theme.border-gradient;
-            border-radius: Theme.radius-md;
-            height: 120px;
-
-            VerticalLayout {
-                padding: 12px;
-                spacing: 8px;
-
-                HorizontalLayout {
-                    alignment: space-between;
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icons/monitor.svg");
-                            width: 12px;
-                            height: 12px;
-                            colorize: Theme.text-muted;
-                        }
-                        Text {
-                            text: root.lang == "AR" ? "المستلم على هذا الهاتف" : "RECEIVED ON THIS PHONE";
-                            font-size: 9px;
-                            font-weight: 700;
-                            color: Theme.text-muted;
-                            letter-spacing: 0.8px;
-                        }
-                    }
-
-                    Rectangle {
-                        background: copy-rec-btn.pressed ? #1c263c : #0a0e18;
-                        border-width: 1px;
-                        border-color: root.clipboard_copied ? Theme.status-shield : Theme.border-subtle;
-                        border-radius: 5px;
-                        height: 24px;
-                        copy-rec-btn := TouchArea {
-                            clicked => { root.copy_received_clicked(); }
-                        }
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 4px;
-                            alignment: center;
-                            Image {
-                                source: root.clipboard_copied ? @image-url("../assets/icons/check.svg") : @image-url("../assets/icons/copy.svg");
-                                width: 10px;
-                                height: 10px;
-                                colorize: root.clipboard_copied ? Theme.status-shield : Theme.text-secondary;
-                            }
-                            Text {
-                                text: root.clipboard_copied ? (root.lang == "AR" ? "تم النسخ" : "COPIED") : (root.lang == "AR" ? "نسخ" : "Copy");
-                                font-size: 9px;
-                                font-weight: 700;
-                                color: root.clipboard_copied ? Theme.status-shield : Theme.text-secondary;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
+                TextField {
+                    text <=> AppState.pair_secret; secret: true;
+                    label: AppState.rtl ? "رمز الجهاز الآخر" : "Other device’s code";
+                    placeholder: AppState.rtl ? "الصق الرمز الكامل هنا…" : "Paste the complete code here…";
+                    min-height: 88px;
                 }
-
-                Rectangle {
-                    background: Theme.recessed-gradient;
-                    border-radius: Theme.radius-sm;
-                    border-width: 1px;
-                    border-color: Theme.border-subtle;
-                    vertical-stretch: 1;
-
-                    Text {
-                        text: root.last_received_text;
-                        font-size: 11px;
-                        color: root.last_received_text == "No text received yet" ? Theme.text-faint : Theme.text-primary;
-                        wrap: word-wrap;
-                        x: 10px;
-                        y: 8px;
-                        width: parent.width - 20px;
-                        height: parent.height - 16px;
-                    }
+                FlowButton {
+                    text: AppState.pairing_busy ? (AppState.rtl ? "جارٍ الحفظ…" : "Saving…") : (AppState.rtl ? "حفظ الاقتران" : "Save pairing");
+                    primary: true; horizontal-stretch: 1;
+                    enabled: AppState.pair_secret != "" && !AppState.pairing_busy;
+                    clicked => { AppState.pair_device(AppState.pair_secret); }
                 }
+                SmallText { text: AppState.rtl ? "أكمل تبادل الرمزين على الجهازين مرة واحدة." : "Complete the code exchange on both devices once."; }
             }
         }
     }
+}
 
-    // 6. نافذة السجل المنبثقة للهاتف (Modal Activity Sheet)
-    if root.show_history : Rectangle {
-        x: 0;
-        y: 0;
-        width: parent.width;
-        height: parent.height;
-        background: #06080ef2;
-
-        VerticalLayout {
-            padding-top: root.safe_area_top + 10px;
-            padding-bottom: root.safe_area_bottom + 10px;
-            padding-left: 18px;
-            padding-right: 18px;
-            spacing: 12px;
-
-            HorizontalLayout {
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
-                    Image {
-                        source: @image-url("../assets/icons/history.svg");
-                        width: 16px;
-                        height: 16px;
-                        colorize: Theme.accent;
-                    }
-                    Text {
-                        text: root.lang == "AR" ? "سجل عمليات النقل" : "SESSION ACTIVITY";
-                        font-size: 13px;
-                        font-weight: 800;
-                        color: Theme.text-primary;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    if root.history_items.length > 0 : Rectangle {
-                        background: clr-m-hist.pressed ? #f43f5e33 : #0a0e18;
-                        border-radius: 6px;
-                        border-width: 1px;
-                        border-color: #f43f5e55;
-                        height: 26px;
-                        clr-m-hist := TouchArea {
-                            clicked => { root.clear_history(); }
-                        }
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            Text {
-                                text: root.lang == "AR" ? "مسح" : "CLEAR";
-                                font-size: 9px;
-                                font-weight: 700;
-                                color: Theme.status-error;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: 26px;
-                        height: 26px;
-                        border-radius: 6px;
-                        background: #141c2c;
-                        close-m-hist := TouchArea {
-                            clicked => { root.show_history = false; }
-                        }
-                        Image {
-                            source: @image-url("../assets/icons/x.svg");
-                            width: 12px;
-                            height: 12px;
-                            colorize: Theme.text-muted;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-                }
-            }
-
-            if root.history_items.length == 0 : VerticalLayout {
-                alignment: center;
-                vertical-stretch: 1;
-                Text {
-                    text: root.lang == "AR" ? "لا توجد عمليات نقل سابقة" : "No transfers recorded in this session";
-                    font-size: 12px;
-                    color: Theme.text-muted;
-                    horizontal-alignment: center;
-                }
-            }
-
-            if root.history_items.length > 0 : ScrollView {
-                vertical-stretch: 1;
+export component FileBrowser inherits Rectangle {
+    VerticalLayout {
+        padding: AppState.mobile_mode ? 16px : 24px; spacing: 14px;
+        FlowRow {
+            SectionTitle { text: AppState.browser_read_only ? (AppState.rtl ? "الملفات المستلمة" : "Received files") : (AppState.rtl ? "اختيار ملفات" : "Choose files"); font-size: 21px; horizontal-stretch: 1; }
+            FlowButton { text: AppState.browser_read_only ? (AppState.rtl ? "إغلاق" : "Close") : (AppState.rtl ? "إلغاء" : "Cancel"); quiet: true; clicked => { AppState.close_file_browser(); } }
+        }
+        FlowRow {
+            FlowButton { text: AppState.rtl ? "للأعلى" : "Up"; enabled: AppState.browser_can_up; clicked => { AppState.browse_up(); } }
+            FlowButton { text: AppState.rtl ? "تحديث" : "Refresh"; icon: @image-url("../assets/icons/refresh.svg"); quiet: true; clicked => { AppState.browse_path(AppState.browser_path); } }
+            if AppState.mobile_mode && !AppState.browser_read_only : FlowButton { text: AppState.rtl ? "الوصول" : "Access"; quiet: true; clicked => { AppState.request_storage_access(); } }
+        }
+        SmallText { text: AppState.browser_path; horizontal-alignment: left; wrap: no-wrap; overflow: elide; color: Theme.muted; }
+        Panel {
+            vertical-stretch: 1;
+            ScrollView {
                 VerticalLayout {
-                    spacing: 8px;
-                    for item in root.history_items : Rectangle {
-                        background: Theme.card-gradient;
-                        border-radius: Theme.radius-sm;
-                        border-width: 1px;
-                        border-color: Theme.border-subtle;
-                        height: 48px;
-
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            spacing: 10px;
-                            alignment: center;
-
-                            Image {
-                                source: item.kind == "file" ? @image-url("../assets/icons/file-up.svg") : @image-url("../assets/icons/send.svg");
-                                width: 14px;
-                                height: 14px;
-                                colorize: item.kind == "file" ? Theme.status-shield : Theme.accent;
-                            }
-
+                    padding-left: 12px; padding-right: 12px;
+                    if AppState.browser_items.length == 0 : VerticalLayout {
+                        padding: 18px; spacing: 12px;
+                        BodyText { text: AppState.rtl ? "لا توجد ملفات متاحة هنا." : "No accessible files here."; font-weight: 500; }
+                        SmallText { text: AppState.browser_read_only ? (AppState.rtl ? "ستظهر الملفات التي تستلمها في هذا المجلد." : "Files you receive will appear in this folder.") : (AppState.rtl ? "اختر مجلدًا آخر. إذا لزم إذن للملفات، افتح الوصول ثم عد واضغط تحديث." : "Try another folder. If file access is needed, open Access, then return and refresh."); }
+                    }
+                    for entry in AppState.browser_items : Rectangle {
+                        min-height: AppState.mobile_mode ? 82px : 72px;
+                        background: entry.selected && !AppState.browser_read_only ? Theme.accent_soft : transparent;
+                        border-radius: 8px;
+                        FlowRow {
+                            padding-left: 10px; padding-right: 10px;
+                            Image { source: entry.is_dir ? @image-url("../assets/icons/folder.svg") : @image-url("../assets/icons/file-up.svg"); width: 21px; height: 21px; colorize: Theme.secondary; }
                             VerticalLayout {
-                                spacing: 1px;
-                                horizontal-stretch: 1;
-                                alignment: center;
-                                Text {
-                                    text: item.title;
-                                    font-size: 11px;
-                                    font-weight: 600;
-                                    color: Theme.text-primary;
-                                    overflow: elide;
-                                }
-                                Text {
-                                    text: item.subtitle;
-                                    font-size: 9px;
-                                    color: Theme.text-muted;
-                                }
+                                horizontal-stretch: 1; spacing: 3px;
+                                BodyText { text: entry.name; font-weight: 500; overflow: elide; wrap: no-wrap; }
+                                if entry.detail != "" : SmallText { text: entry.detail; overflow: elide; wrap: no-wrap; }
                             }
-
-                            Text {
-                                text: item.timestamp;
-                                font-size: 9px;
-                                color: Theme.text-muted;
-                                vertical-alignment: center;
+                            FlowButton {
+                                text: entry.is_dir ? (AppState.rtl ? "فتح" : "Open") : AppState.browser_read_only ? (AppState.mobile_mode ? (AppState.rtl ? "حفظ نسخة" : "Save copy") : (AppState.rtl ? "فتح" : "Open")) : entry.selected ? (AppState.rtl ? "محدد" : "Selected") : (AppState.rtl ? "تحديد" : "Select");
+                                selected: entry.selected && !AppState.browser_read_only;
+                                quiet: !entry.selected || AppState.browser_read_only;
+                                clicked => {
+                                    if (entry.is_dir) { AppState.browse_path(entry.path); }
+                                    else if (AppState.browser_read_only) { AppState.open_browser_file(entry.path); }
+                                    else { AppState.toggle_file(entry.path); }
+                                }
                             }
                         }
+                        Separator { y: parent.height - 1px; }
                     }
                 }
+            }
+        }
+        if !AppState.browser_read_only : FlowRow {
+            SmallText { text: AppState.rtl ? "إلى " + AppState.peer_name : "To " + AppState.peer_name; horizontal-stretch: 1; overflow: elide; wrap: no-wrap; }
+            FlowButton {
+                text: AppState.rtl ? "إرسال (" + AppState.browser_selection_count + ")" : "Send (" + AppState.browser_selection_count + ")";
+                primary: true; enabled: AppState.browser_selection_count > 0 && AppState.is_connected && !AppState.busy;
+                clicked => { AppState.send_selected_files(); }
             }
         }
     }

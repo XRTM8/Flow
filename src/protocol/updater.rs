@@ -59,7 +59,8 @@ pub fn is_newer_version(current: &str, remote: &str) -> bool {
 }
 
 /// فحص وجود إصدار جديد عبر GitHub API
-pub async fn check_latest_release() -> Result<Option<AvailableUpdate>, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn check_latest_release(
+) -> Result<Option<AvailableUpdate>, Box<dyn std::error::Error + Send + Sync>> {
     tokio::task::spawn_blocking(|| {
         #[cfg(target_os = "windows")]
         {
@@ -100,13 +101,19 @@ pub async fn check_latest_release() -> Result<Option<AvailableUpdate>, Box<dyn s
                     release
                         .assets
                         .iter()
-                        .find(|a| a.name.ends_with(".exe") && a.name.to_lowercase().contains("setup"))
+                        .find(|a| {
+                            a.name.ends_with(".exe") && a.name.to_lowercase().contains("setup")
+                        })
                         .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")))
                 } else {
                     release
                         .assets
                         .iter()
-                        .find(|a| a.name.ends_with(".exe") && (a.name.to_lowercase().contains("portable") || !a.name.to_lowercase().contains("setup")))
+                        .find(|a| {
+                            a.name.ends_with(".exe")
+                                && (a.name.to_lowercase().contains("portable")
+                                    || !a.name.to_lowercase().contains("setup"))
+                        })
                         .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")))
                 };
 
@@ -139,7 +146,9 @@ pub async fn check_latest_release() -> Result<Option<AvailableUpdate>, Box<dyn s
                 let body = String::from_utf8_lossy(&out.stdout);
                 if let Ok(release) = serde_json::from_str::<GitHubRelease>(&body) {
                     if is_newer_version(CURRENT_VERSION, &release.tag_name) {
-                        if let Some(apk_asset) = release.assets.iter().find(|a| a.name.ends_with(".apk")) {
+                        if let Some(apk_asset) =
+                            release.assets.iter().find(|a| a.name.ends_with(".apk"))
+                        {
                             return Ok(Some(AvailableUpdate {
                                 version: release.tag_name.clone(),
                                 tag_name: release.tag_name,
@@ -160,53 +169,57 @@ pub async fn check_latest_release() -> Result<Option<AvailableUpdate>, Box<dyn s
 }
 
 /// تنزيل وتطبيق التحديث بسلاسة بدون تضارب حزم (Zero-Collision In-Place Upgrade)
-pub async fn apply_update_in_place(update: &AvailableUpdate) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn apply_update_in_place(
+    update: &AvailableUpdate,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let update_clone = update.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let temp_dir = std::env::temp_dir().join("OtiumFlowUpdate");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let target_file = temp_dir.join(&update_clone.asset_name);
+    tokio::task::spawn_blocking(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            let temp_dir = std::env::temp_dir().join("OtiumFlowUpdate");
+            let _ = std::fs::create_dir_all(&temp_dir);
+            let target_file = temp_dir.join(&update_clone.asset_name);
 
-        #[cfg(target_os = "windows")]
-        {
-            // 1. تنزيل الملف عبر curl
-            let target_str = target_file.to_str().unwrap_or("update.exe");
-            let dl_status = std::process::Command::new("curl.exe")
-                .args(["-L", "-s", "-o", target_str, &update_clone.download_url])
-                .status()?;
+            #[cfg(target_os = "windows")]
+            {
+                // 1. تنزيل الملف عبر curl
+                let target_str = target_file.to_str().unwrap_or("update.exe");
+                let dl_status = std::process::Command::new("curl.exe")
+                    .args(["-L", "-s", "-o", target_str, &update_clone.download_url])
+                    .status()?;
 
-            if !dl_status.success() {
-                return Err("Failed to download update package".into());
+                if !dl_status.success() {
+                    return Err("Failed to download update package".into());
+                }
+
+                if update_clone.is_setup {
+                    // تشغيل المثبت الصامت مع إغلاق وإعادة فتح التطبيق تلقائياً
+                    let _ = std::process::Command::new(&target_file)
+                        .args(["/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
+                        .spawn();
+                    std::process::exit(0);
+                } else {
+                    // تحديث النسخة المحمولة (Self-Replacement Pattern)
+                    let current_exe = std::env::current_exe()?;
+                    let old_exe = current_exe.with_extension("exe.old");
+
+                    // إعادة تسمية الملف التنفيذي الحالي للسماح باستبداله في نظام ويندوز
+                    let _ = std::fs::remove_file(&old_exe);
+                    std::fs::rename(&current_exe, &old_exe)?;
+                    std::fs::copy(&target_file, &current_exe)?;
+
+                    // تشغيل النسخة الجديدة وإغلاق الحالية
+                    let _ = std::process::Command::new(&current_exe).spawn();
+                    std::process::exit(0);
+                }
             }
 
-            if update_clone.is_setup {
-                // تشغيل المثبت الصامت مع إغلاق وإعادة فتح التطبيق تلقائياً
-                let _ = std::process::Command::new(&target_file)
-                    .args(["/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
-                    .spawn();
-                std::process::exit(0);
-            } else {
-                // تحديث النسخة المحمولة (Self-Replacement Pattern)
-                let current_exe = std::env::current_exe()?;
-                let old_exe = current_exe.with_extension("exe.old");
-
-                // إعادة تسمية الملف التنفيذي الحالي للسماح باستبداله في نظام ويندوز
-                let _ = std::fs::remove_file(&old_exe);
-                std::fs::rename(&current_exe, &old_exe)?;
-                std::fs::copy(&target_file, &current_exe)?;
-
-                // تشغيل النسخة الجديدة وإغلاق الحالية
-                let _ = std::process::Command::new(&current_exe).spawn();
-                std::process::exit(0);
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = target_file;
+                Ok(())
             }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = target_file;
-            Ok(())
-        }
-    })
+        },
+    )
     .await?
 }
 

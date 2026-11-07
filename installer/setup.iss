@@ -1,5 +1,5 @@
 #define MyAppName "FLOW by Otium"
-#define MyAppVersion "2.4.0"
+#define MyAppVersion "2.4.2"
 #define MyAppPublisher "Otium"
 #define MyAppURL "https://github.com/XRTM8/Flow"
 #define MyAppExeName "OtiumFlow.exe"
@@ -14,7 +14,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\Otium\Flow
 DisableProgramGroupPage=yes
-OutputBaseFilename=OtiumFlow-v2.4.0-Setup-x64
+OutputBaseFilename=OtiumFlow-v2.4.2-Setup-x64
 OutputDir=..\dist
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -34,6 +34,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\target\release\otium-flow-app.exe"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+Source: "..\assets\fonts\OFL.txt"; DestDir: "{app}\licenses"; DestName: "NotoSansArabic-OFL.txt"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}\licenses"; DestName: "Flow-GPL.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -1,54 +1,44 @@
+import { AppState } from "state.slint";
+
 export global Theme {
-    // فلسفة الأوبسيديان الزجاجي والنيون الكوبالتي (Raycast / Linear Obsidian Glass)
-    
-    // التدرجات اللونية الزجاجية
-    in property <brush> bg-gradient: @linear-gradient(180deg, #0d111c 0%, #06080e 100%);
-    in property <brush> card-gradient: @linear-gradient(180deg, #121826 0%, #0a0e17 100%);
-    in property <brush> card-hover-gradient: @linear-gradient(180deg, #172033 0%, #0e1422 100%);
-    in property <brush> recessed-gradient: @linear-gradient(180deg, #05070c 0%, #070b13 100%);
-    in property <brush> border-gradient: @linear-gradient(180deg, #233149 0%, #111724 100%);
-    in property <brush> border-focus: #00d2ff;
-    
-    // الأزرار والتفاعلات النيون
-    in property <brush> beam-gradient: @linear-gradient(135deg, #00d2ff 0%, #0284c7 100%);
-    in property <brush> beam-gradient-hover: @linear-gradient(135deg, #38bdf8 0%, #0369a1 100%);
-    in property <brush> file-gradient: @linear-gradient(135deg, #10b981 0%, #059669 100%);
-    in property <brush> file-gradient-hover: @linear-gradient(135deg, #34d399 0%, #047857 100%);
-    
-    // الألوان المسطحة المتوافقة
-    in property <color> background: #06080e;
-    in property <color> surface: #0e1422;
-    in property <color> surface-elevated: #141c2e;
-    in property <color> surface-hover: #172033;
-    in property <color> surface-pressed: #090e17;
-    in property <color> recessed: #05070c;
-    
-    // الحدود
-    in property <color> border: #1c2638;
-    in property <color> border-subtle: #111724;
-    in property <color> border-accent-glow: #00d2ff44;
-    
-    // ألوان النصوص
-    in property <color> text-primary: #ffffff;
-    in property <color> text-secondary: #94a3b8;
-    in property <color> text-muted: #64748b;
-    in property <color> text-faint: #334155;
-    
-    // اللمسات الكهربائية
-    in property <color> accent: #00d2ff;
-    in property <color> accent-glow: #00d2ff28;
-    in property <color> accent-hover: #38bdf8;
-    in property <color> accent-pressed: #0284c7;
-    in property <color> accent-secondary: #6366f1;
-    
-    in property <color> status-online: #10b981;
-    in property <color> status-waiting: #f59e0b;
-    in property <color> status-error: #f43f5e;
-    in property <color> status-shield: #10b981;
-    
-    // مقاييس الانحناء
-    in property <length> radius-xs: 6px;
-    in property <length> radius-sm: 10px;
-    in property <length> radius-md: 16px;
-    in property <length> radius-lg: 24px;
+    out property <color> background: AppState.dark_mode ? #000000 : #e7e9ed;
+    out property <brush> backdrop: AppState.dark_mode
+        ? #000000
+        : @linear-gradient(145deg, #f6f7f9e8 0%, #e3e6ebe8 62%, #d4d9e0e8 100%);
+    out property <brush> native_tint: AppState.dark_mode
+        ? #000000
+        : @linear-gradient(150deg, #f4f6f8a8 0%, #dce1e8b8 100%);
+    out property <brush> surface: AppState.dark_mode
+        ? @linear-gradient(180deg, #191d24d0 0%, #11151cdb 100%)
+        : @linear-gradient(180deg, #ffffffc9 0%, #f1f3f6b8 100%);
+    out property <color> field: AppState.dark_mode ? #080b10d9 : #ffffffa8;
+    out property <color> subtle: AppState.dark_mode ? #ffffff07 : #ffffff5c;
+    out property <color> hover: AppState.dark_mode ? #ffffff11 : #ffffffa3;
+    out property <color> pressed: AppState.dark_mode ? #ffffff1c : #cbd1da85;
+    out property <color> border: AppState.dark_mode ? #ffffff1a : #5f6c802b;
+    out property <color> edge: AppState.dark_mode ? #ffffff26 : #ffffffd6;
+    out property <color> text: AppState.dark_mode ? #dce2eb : #242a33;
+    out property <color> heading: AppState.dark_mode ? #eef1f5 : #242a33;
+    out property <color> secondary: AppState.dark_mode ? #adb6c4 : #515d6f;
+    out property <color> muted: AppState.dark_mode ? #8e99ab : #657186;
+    out property <color> focus: AppState.dark_mode ? #cbd3df : #53647d;
+    out property <color> accent: AppState.dark_mode ? #d5dde8 : #39465a;
+    out property <color> accent_soft: AppState.dark_mode ? #ffffff0f : #ffffffb0;
+    out property <brush> primary: AppState.dark_mode ? @linear-gradient(180deg, #e0e5ec 0%, #b9c2ce 100%) : @linear-gradient(180deg, #f9fafb 0%, #d5dae2 100%);
+    out property <brush> primary_hover: AppState.dark_mode ? @linear-gradient(180deg, #edf0f5 0%, #c9d1dc 100%) : @linear-gradient(180deg, #ffffff 0%, #e3e7ed 100%);
+    out property <brush> primary_pressed: AppState.dark_mode ? @linear-gradient(180deg, #acb7c6 0%, #cad2dd 100%) : @linear-gradient(180deg, #cbd2dc 0%, #e3e7ed 100%);
+    out property <color> primary_border: #9aa7b6a6;
+    out property <color> on_primary: #202935;
+    out property <color> accent_fill: AppState.dark_mode ? #c6d0dd : #64748b;
+    out property <color> accent_hover: AppState.dark_mode ? #e0e5ec : #4a5c73;
+    out property <color> selection: AppState.dark_mode ? #c6d0dd : #465c78;
+    out property <color> on_selection: AppState.dark_mode ? #18212e : #ffffff;
+    out property <color> disabled: AppState.dark_mode ? #ffffff08 : #ffffff38;
+    out property <color> disabled_text: AppState.dark_mode ? #8e98a7 : #7b8798;
+    out property <color> success: AppState.dark_mode ? #b1d3bf : #35634c;
+    out property <color> warning: AppState.dark_mode ? #ddc6a1 : #7f5c2a;
+    out property <color> error: AppState.dark_mode ? #e4b1b1 : #943e44;
+    out property <color> error_soft: AppState.dark_mode ? #7a323226 : #b34c4c12;
+    out property <color> shadow: AppState.dark_mode ? #00000020 : #2838510c;
+    out property <length> radius: 14px;
 }

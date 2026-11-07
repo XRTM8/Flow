@@ -1,130 +1,945 @@
-use chacha20poly1305::aead::{Aead, KeyInit};
+//! Protocol 3: mutually paired, challenge-bound authenticated frames.
+//! Plain discovery is allowed; user data never has a plaintext/downgrade path.
+use super::discovery::{BeaconMessage, DeviceType, Peer};
+use super::trust::TrustManager;
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
-
-use super::trust::TrustManager;
+use tokio::sync::{mpsc, Semaphore};
 
 pub const DEFAULT_TCP_PORT: u16 = 54125;
-const CHUNK_SIZE: usize = 64 * 1024; // 64 KB streaming buffer
-const MAX_HEADER_SIZE: usize = 32 * 1024 * 1024; // 32 MB حماية ضد هجمات DoS مع السماح بصور الحافظة عالية الدقة
-const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024 * 1024; // 50 GB سقف أمان أقصى لحجم الملف المنقول لمنع استنزاف القرص
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(15); // مهلة أمان قصوى لمنع هجمات Slowloris والتعليق الشبكي
-
-/// اتصال شبكي مع إعادة المحاولة التلقائية والتراجع الأسي ضد تقلبات الواي فاي
-pub async fn connect_with_retry(target: SocketAddr, max_retries: usize) -> std::io::Result<TcpStream> {
-    let mut delay = Duration::from_millis(80);
-    for attempt in 0..max_retries {
-        match tokio::time::timeout(Duration::from_millis(2500), TcpStream::connect(target)).await {
-            Ok(Ok(stream)) => {
-                let _ = stream.set_nodelay(true);
-                return Ok(stream);
-            }
-            Ok(Err(_)) | Err(_) if attempt + 1 < max_retries => {
-                tokio::time::sleep(delay).await;
-                delay *= 2;
-            }
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection attempt timed out")),
-        }
-    }
-    Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Max connection retries exceeded"))
-}
-
-const WINDOWS_RESERVED_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL",
-    "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    "CLOCK$", "CONIN$", "CONOUT$",
-];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PacketHeader {
-    PingAnnounce {
-        id: String,
-        name: String,
-        device_type: super::discovery::DeviceType,
-        tcp_port: u16,
-    },
-    ClipboardText {
-        content: String,
-        #[serde(default)]
-        sender_id: Option<String>,
-    },
-    ClipboardImage {
-        width: usize,
-        height: usize,
-        data: Vec<u8>,
-        #[serde(default)]
-        sender_id: Option<String>,
-    },
-    FileOffer {
-        name: String,
-        size: u64,
-        sha256: Option<String>,
-        #[serde(default)]
-        sender_id: Option<String>,
-        #[serde(default)]
-        file_id: Option<String>,
-        #[serde(default)]
-        offset: u64,
-    },
-    ResumeQuery {
-        file_id: String,
-        name: String,
-        total_size: u64,
-        #[serde(default)]
-        sender_id: Option<String>,
-    },
-    ResumeResponse {
-        file_id: String,
-        offset: u64,
-        accepted: bool,
-    },
-    EncryptedPayload {
-        nonce: [u8; 12],
-        ciphertext: Vec<u8>,
-        #[serde(default)]
-        sender_id: Option<String>,
-        #[serde(default)]
-        timestamp_secs: u64,
-    },
-}
+const MAGIC: &[u8; 8] = b"FLOWSEC3";
+const PING_MAGIC: &[u8; 8] = b"FLOWPING";
+const CHUNK_SIZE: usize = 64 * 1024;
+const MAX_TEXT_SIZE: usize = 1024 * 1024;
+const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024 * 1024;
+const TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum TransferEvent {
-    PeerDiscovered(super::discovery::Peer),
-    ClipboardReceived(String),
-    ClipboardImageReceived {
-        width: usize,
-        height: usize,
-        data: Vec<u8>,
-    },
-    FileStart { name: String, total_bytes: u64 },
-    FileProgress {
+    PeerDiscovered(Peer),
+    IncomingStarted {
+        id: String,
+        peer_id: String,
         name: String,
+        total_bytes: u64,
+        kind: String,
+    },
+    IncomingProgress {
+        id: String,
         current_bytes: u64,
         total_bytes: u64,
         speed_mb_s: f64,
         eta_secs: u64,
     },
-    FileComplete { name: String, path: PathBuf },
-    Error(String),
+    IncomingComplete {
+        id: String,
+        peer_id: String,
+        name: String,
+        path: Option<PathBuf>,
+        text: Option<String>,
+        total_bytes: u64,
+    },
+    IncomingFailed {
+        id: String,
+        peer_id: String,
+        name: String,
+        message: String,
+    },
 }
 
-/// تنسيق الحجم بطريقة أنيقة تتكيف تلقائياً مع حجم الملف (Bytes, KB, MB, GB)
+#[derive(Debug, Serialize, Deserialize)]
+struct Hello {
+    sender_id: String,
+    recipient_id: String,
+    transfer_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum Command {
+    Probe,
+    Text {
+        text: String,
+    },
+    File {
+        name: String,
+        size: u64,
+        sha256: [u8; 32],
+    },
+    Ack,
+}
+
+fn error(kind: io::ErrorKind, message: impl Into<String>) -> io::Error {
+    io::Error::new(kind, message.into())
+}
+fn invalid(message: impl Into<String>) -> io::Error {
+    error(io::ErrorKind::InvalidData, message)
+}
+fn auth_error() -> io::Error {
+    error(
+        io::ErrorKind::PermissionDenied,
+        "Pairing could not be verified. Exchange the codes on both devices again",
+    )
+}
+fn cancelled_error() -> io::Error {
+    error(io::ErrorKind::Interrupted, "Transfer cancelled")
+}
+
+async fn bounded<F, T>(future: F) -> io::Result<T>
+where
+    F: std::future::Future<Output = io::Result<T>>,
+{
+    tokio::time::timeout(TIMEOUT, future).await.map_err(|_| {
+        error(
+            io::ErrorKind::TimedOut,
+            "The other device did not respond in time",
+        )
+    })?
+}
+
+async fn wait_cancelled(token: &AtomicBool) {
+    loop {
+        if token.load(Ordering::Acquire) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
+fn random_bytes<const N: usize>() -> [u8; N] {
+    // The first four UUID bytes contain no fixed version/variant bits.
+    let mut bytes = [0u8; N];
+    for chunk in bytes.chunks_mut(4) {
+        let uuid = uuid::Uuid::new_v4();
+        chunk.copy_from_slice(&uuid.as_bytes()[..chunk.len()]);
+    }
+    bytes
+}
+
+struct SecureChannel {
+    stream: TcpStream,
+    cipher: ChaCha20Poly1305,
+    context: Vec<u8>,
+    tx_sequence: u64,
+    rx_sequence: u64,
+    sender_side: bool,
+}
+
+impl SecureChannel {
+    fn new(
+        stream: TcpStream,
+        psk: &[u8; 32],
+        challenge: &[u8; 32],
+        hello_bytes: &[u8],
+        sender_side: bool,
+    ) -> Self {
+        let mut hash = Sha256::new();
+        hash.update(b"FLOW-3-SESSION\0");
+        hash.update(psk);
+        hash.update(challenge);
+        hash.update((hello_bytes.len() as u32).to_be_bytes());
+        hash.update(hello_bytes);
+        let key: [u8; 32] = hash.finalize().into();
+        let mut context = Vec::from(&b"FLOW-3-FRAME\0"[..]);
+        context.extend_from_slice(challenge);
+        context.extend_from_slice(hello_bytes);
+        Self {
+            stream,
+            cipher: ChaCha20Poly1305::new((&key).into()),
+            context,
+            tx_sequence: 0,
+            rx_sequence: 0,
+            sender_side,
+        }
+    }
+    fn aad(&self, direction: bool, sequence: u64) -> Vec<u8> {
+        let mut aad = self.context.clone();
+        aad.push(u8::from(direction));
+        aad.extend_from_slice(&sequence.to_be_bytes());
+        aad
+    }
+    async fn write(&mut self, plaintext: &[u8]) -> io::Result<()> {
+        let nonce = random_bytes::<12>();
+        let aad = self.aad(self.sender_side, self.tx_sequence);
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| auth_error())?;
+        self.tx_sequence = self
+            .tx_sequence
+            .checked_add(1)
+            .ok_or_else(|| invalid("Frame counter exhausted"))?;
+        bounded(async {
+            self.stream
+                .write_u32((ciphertext.len() + nonce.len()) as u32)
+                .await?;
+            self.stream.write_all(&nonce).await?;
+            self.stream.write_all(&ciphertext).await
+        })
+        .await
+    }
+    async fn read(&mut self, maximum_plaintext: usize) -> io::Result<Vec<u8>> {
+        let (nonce, ciphertext) = bounded(async {
+            let len = self.stream.read_u32().await? as usize;
+            if len < 28 || len > maximum_plaintext + 28 {
+                return Err(invalid("Invalid encrypted frame size"));
+            }
+            let mut nonce = [0u8; 12];
+            self.stream.read_exact(&mut nonce).await?;
+            let mut ciphertext = vec![0u8; len - 12];
+            self.stream.read_exact(&mut ciphertext).await?;
+            Ok((nonce, ciphertext))
+        })
+        .await?;
+        let aad = self.aad(!self.sender_side, self.rx_sequence);
+        let plaintext = self
+            .cipher
+            .decrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| auth_error())?;
+        self.rx_sequence = self
+            .rx_sequence
+            .checked_add(1)
+            .ok_or_else(|| invalid("Frame counter exhausted"))?;
+        Ok(plaintext)
+    }
+    async fn command(&mut self, command: &Command) -> io::Result<()> {
+        self.write(&serde_json::to_vec(command).map_err(io::Error::other)?)
+            .await
+    }
+    async fn ack(&mut self) -> io::Result<()> {
+        match serde_json::from_slice::<Command>(&self.read(512).await?)
+            .map_err(|_| invalid("Invalid completion acknowledgement"))?
+        {
+            Command::Ack => Ok(()),
+            _ => Err(invalid("The receiver did not confirm completion")),
+        }
+    }
+}
+
+pub struct TransferManager {
+    pub port: u16,
+    pub download_dir: PathBuf,
+    pub trust_manager: Arc<TrustManager>,
+    connection_limiter: Arc<Semaphore>,
+    incoming: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    reserved_bytes: Mutex<u64>,
+}
+
+impl TransferManager {
+    pub fn with_trust(port: u16, download_dir: PathBuf, trust: Arc<TrustManager>) -> Self {
+        Self {
+            port,
+            download_dir,
+            trust_manager: trust,
+            connection_limiter: Arc::new(Semaphore::new(16)),
+            incoming: Mutex::new(HashMap::new()),
+            reserved_bytes: Mutex::new(0),
+        }
+    }
+
+    pub fn cancel_incoming(&self, id: &str) -> bool {
+        if let Some(token) = self
+            .incoming
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+        {
+            token.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn start_receiver(
+        self: Arc<Self>,
+        sender: mpsc::UnboundedSender<TransferEvent>,
+    ) -> io::Result<()> {
+        let listener = TcpListener::bind(("0.0.0.0", self.port)).await?;
+        self.start_with_listener(listener, sender).await;
+        Ok(())
+    }
+
+    pub async fn start_with_listener(
+        self: Arc<Self>,
+        listener: TcpListener,
+        sender: mpsc::UnboundedSender<TransferEvent>,
+    ) {
+        tokio::spawn(async move {
+            while let Ok((stream, address)) = listener.accept().await {
+                let permit = match self.connection_limiter.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let manager = self.clone();
+                let events = sender.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    // Unauthenticated network noise must not create false activity rows.
+                    let _ = manager.handle_connection(stream, address, events).await;
+                });
+            }
+        });
+    }
+
+    async fn open_channel(
+        &self,
+        target: SocketAddr,
+        peer_id: &str,
+        transfer_id: &str,
+    ) -> io::Result<SecureChannel> {
+        if uuid::Uuid::parse_str(transfer_id).is_err() {
+            return Err(invalid("Invalid transfer identifier"));
+        }
+        let psk = self.trust_manager.get_key_for_peer(peer_id).await?;
+        let mut stream = connect_with_retry(target, 3).await?;
+        let hello = Hello {
+            sender_id: self.trust_manager.self_id().into(),
+            recipient_id: peer_id.into(),
+            transfer_id: transfer_id.into(),
+        };
+        let hello_bytes = serde_json::to_vec(&hello).map_err(io::Error::other)?;
+        bounded(async {
+            stream.write_all(MAGIC).await?;
+            stream.write_u32(hello_bytes.len() as u32).await?;
+            stream.write_all(&hello_bytes).await
+        })
+        .await?;
+        let mut challenge = [0u8; 32];
+        bounded(stream.read_exact(&mut challenge)).await?;
+        Ok(SecureChannel::new(
+            stream,
+            &psk,
+            &challenge,
+            &hello_bytes,
+            true,
+        ))
+    }
+
+    /// A successful challenge/ACK verifies pairing and reachability, not mere discovery.
+    pub async fn verify_peer(&self, target: SocketAddr, peer_id: &str) -> io::Result<()> {
+        let mut channel = self
+            .open_channel(target, peer_id, &uuid::Uuid::new_v4().to_string())
+            .await?;
+        channel.command(&Command::Probe).await?;
+        channel.ack().await
+    }
+
+    pub async fn send_secure_text(
+        &self,
+        target: SocketAddr,
+        peer_id: &str,
+        text: String,
+        transfer_id: &str,
+    ) -> io::Result<()> {
+        if text.trim().is_empty() {
+            return Err(invalid("Enter text before sending"));
+        }
+        if text.len() > MAX_TEXT_SIZE {
+            return Err(invalid("Text is limited to 1 MB"));
+        }
+        let mut channel = self.open_channel(target, peer_id, transfer_id).await?;
+        channel.command(&Command::Text { text }).await?;
+        channel.ack().await
+    }
+
+    pub async fn send_secure_file<F>(
+        &self,
+        target: SocketAddr,
+        peer_id: &str,
+        path: &Path,
+        transfer_id: &str,
+        cancel: Arc<AtomicBool>,
+        progress: F,
+    ) -> io::Result<()>
+    where
+        F: Fn(u64, u64, f64, u64) + Send,
+    {
+        tokio::select! {
+            result = self.send_file_inner(target, peer_id, path, transfer_id, &cancel, progress) => result,
+            _ = wait_cancelled(&cancel) => Err(cancelled_error()),
+        }
+    }
+
+    async fn send_file_inner<F>(
+        &self,
+        target: SocketAddr,
+        peer_id: &str,
+        path: &Path,
+        transfer_id: &str,
+        cancel: &AtomicBool,
+        progress: F,
+    ) -> io::Result<()>
+    where
+        F: Fn(u64, u64, f64, u64) + Send,
+    {
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled_error());
+        }
+        let mut file = tokio::fs::File::open(path).await?;
+        let metadata = file.metadata().await?;
+        if !metadata.is_file() {
+            return Err(invalid("Select a regular file"));
+        }
+        let total = metadata.len();
+        if total > MAX_FILE_SIZE {
+            return Err(invalid("Files larger than 50 GB are not supported"));
+        }
+        let name = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or_else(|| invalid("The filename is not valid Unicode"))?
+            .to_owned();
+        let mut hash = Sha256::new();
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return Err(cancelled_error());
+            }
+            let count = file.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            hash.update(&buffer[..count]);
+        }
+        use tokio::io::AsyncSeekExt;
+        file.rewind().await?;
+        let sha256: [u8; 32] = hash.finalize().into();
+        let mut channel = self.open_channel(target, peer_id, transfer_id).await?;
+        channel
+            .command(&Command::File {
+                name,
+                size: total,
+                sha256,
+            })
+            .await?;
+        // Receiver has authenticated the offer and reserved safe temporary storage.
+        channel.ack().await?;
+        let start = Instant::now();
+        let mut sent = 0;
+        progress(0, total, 0.0, 0);
+        while sent < total {
+            if cancel.load(Ordering::Acquire) {
+                return Err(cancelled_error());
+            }
+            let max = (total - sent).min(CHUNK_SIZE as u64) as usize;
+            let count = file.read(&mut buffer[..max]).await?;
+            if count == 0 {
+                return Err(invalid("The source file changed during transfer"));
+            }
+            channel.write(&buffer[..count]).await?;
+            sent += count as u64;
+            let (speed, eta) = transfer_rate(sent, total, start);
+            progress(sent, total, speed, eta);
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled_error());
+        }
+        // Success is only reported after checksum verification and durable publication.
+        channel.ack().await
+    }
+
+    async fn handle_connection(
+        &self,
+        mut stream: TcpStream,
+        address: SocketAddr,
+        events: mpsc::UnboundedSender<TransferEvent>,
+    ) -> io::Result<()> {
+        let mut magic = [0u8; 8];
+        bounded(stream.read_exact(&mut magic)).await?;
+        if &magic == PING_MAGIC {
+            let bytes = read_bounded_packet(&mut stream, 1024).await?;
+            let beacon: BeaconMessage = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            if uuid::Uuid::parse_str(&beacon.id).is_ok()
+                && beacon.id != self.trust_manager.self_id()
+                && beacon.tcp_port != 0
+            {
+                let _ = events.send(TransferEvent::PeerDiscovered(Peer {
+                    id: beacon.id,
+                    name: beacon.name.chars().take(40).collect(),
+                    device_type: beacon.device_type,
+                    ip: address.ip(),
+                    tcp_port: beacon.tcp_port,
+                    last_seen: Instant::now(),
+                }));
+            }
+            return Ok(());
+        }
+        if &magic != MAGIC {
+            return Err(invalid("Unsupported protocol; update both devices"));
+        }
+        let hello_bytes = read_bounded_packet(&mut stream, 1024).await?;
+        let mut hello: Hello = serde_json::from_slice(&hello_bytes).map_err(io::Error::other)?;
+        if hello.recipient_id != self.trust_manager.self_id()
+            || uuid::Uuid::parse_str(&hello.sender_id).is_err()
+            || uuid::Uuid::parse_str(&hello.transfer_id).is_err()
+        {
+            return Err(auth_error());
+        }
+        let key = self
+            .trust_manager
+            .get_key_for_peer(&hello.sender_id)
+            .await?;
+        let challenge = random_bytes::<32>();
+        bounded(stream.write_all(&challenge)).await?;
+        let mut channel = SecureChannel::new(stream, &key, &challenge, &hello_bytes, false);
+        // Authenticate before trusting any metadata or producing UI events.
+        let command: Command =
+            serde_json::from_slice(&channel.read(MAX_TEXT_SIZE * 6 + 1024).await?)
+                .map_err(io::Error::other)?;
+        if let Command::Probe = command {
+            return channel.command(&Command::Ack).await;
+        }
+        // UI/cancellation IDs include direction and peer. A remote wire UUID can
+        // never replace an outgoing job, or a job from another paired device.
+        hello.transfer_id = format!("in:{}:{}", hello.sender_id, hello.transfer_id);
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut active = self.incoming.lock().unwrap_or_else(|e| e.into_inner());
+            if active.contains_key(&hello.transfer_id) {
+                return Err(invalid("Duplicate active transfer identifier"));
+            }
+            active.insert(hello.transfer_id.clone(), cancel.clone());
+        }
+        let name = match &command {
+            Command::File { name, .. } => sanitize_filename(name),
+            _ => "Text".into(),
+        };
+        let result = tokio::select! {
+            result = self.receive_command(&mut channel, command, &hello, &events, &cancel) => result,
+            _ = wait_cancelled(&cancel) => Err(cancelled_error()),
+        };
+        self.incoming
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&hello.transfer_id);
+        if let Err(ref problem) = result {
+            let _ = events.send(TransferEvent::IncomingFailed {
+                id: hello.transfer_id,
+                peer_id: hello.sender_id,
+                name,
+                message: problem.to_string(),
+            });
+        }
+        result
+    }
+
+    async fn receive_command(
+        &self,
+        channel: &mut SecureChannel,
+        command: Command,
+        hello: &Hello,
+        events: &mpsc::UnboundedSender<TransferEvent>,
+        cancel: &AtomicBool,
+    ) -> io::Result<()> {
+        match command {
+            Command::Text { text } => {
+                if text.len() > MAX_TEXT_SIZE || text.trim().is_empty() {
+                    return Err(invalid("Invalid text size"));
+                }
+                let total = text.len() as u64;
+                let _ = events.send(TransferEvent::IncomingStarted {
+                    id: hello.transfer_id.clone(),
+                    peer_id: hello.sender_id.clone(),
+                    name: "Text".into(),
+                    total_bytes: total,
+                    kind: "text".into(),
+                });
+                let _ = events.send(TransferEvent::IncomingComplete {
+                    id: hello.transfer_id.clone(),
+                    peer_id: hello.sender_id.clone(),
+                    name: "Text".into(),
+                    path: None,
+                    text: Some(text),
+                    total_bytes: total,
+                });
+                let _ = channel.command(&Command::Ack).await;
+                Ok(())
+            }
+            Command::File { name, size, sha256 } => {
+                if size > MAX_FILE_SIZE {
+                    return Err(invalid("The offered file exceeds the 50 GB limit"));
+                }
+                tokio::fs::create_dir_all(&self.download_dir).await?;
+                let _reservation = {
+                    let mut reserved = self
+                        .reserved_bytes
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let required = size.saturating_add(*reserved).saturating_add(1024 * 1024);
+                    if get_available_disk_space(&self.download_dir)
+                        .is_some_and(|space| space < required)
+                    {
+                        return Err(error(
+                            io::ErrorKind::StorageFull,
+                            "There is not enough space to receive this file",
+                        ));
+                    }
+                    *reserved = reserved.saturating_add(size);
+                    DiskReservation {
+                        reserved: &self.reserved_bytes,
+                        bytes: size,
+                    }
+                };
+                let base = self.download_dir.canonicalize()?;
+                let name = sanitize_filename(&name);
+                let temp_path = base.join(format!(".flow-{}.flowpart", uuid::Uuid::new_v4()));
+                let cleanup = TemporaryFile(temp_path.clone());
+                let mut file = tokio::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&temp_path)
+                    .await?;
+                let _ = events.send(TransferEvent::IncomingStarted {
+                    id: hello.transfer_id.clone(),
+                    peer_id: hello.sender_id.clone(),
+                    name: name.clone(),
+                    total_bytes: size,
+                    kind: "file".into(),
+                });
+                channel.command(&Command::Ack).await?;
+                let mut hash = Sha256::new();
+                let mut received = 0;
+                let start = Instant::now();
+                while received < size {
+                    if cancel.load(Ordering::Acquire) {
+                        return Err(cancelled_error());
+                    }
+                    let chunk = channel.read(CHUNK_SIZE).await?;
+                    if chunk.is_empty() || chunk.len() as u64 > size - received {
+                        return Err(invalid("The received file length does not match its offer"));
+                    }
+                    file.write_all(&chunk).await?;
+                    hash.update(&chunk);
+                    received += chunk.len() as u64;
+                    let (speed, eta) = transfer_rate(received, size, start);
+                    let _ = events.send(TransferEvent::IncomingProgress {
+                        id: hello.transfer_id.clone(),
+                        current_bytes: received,
+                        total_bytes: size,
+                        speed_mb_s: speed,
+                        eta_secs: eta,
+                    });
+                }
+                if cancel.load(Ordering::Acquire) {
+                    return Err(cancelled_error());
+                }
+                let actual: [u8; 32] = hash.finalize().into();
+                if actual != sha256 {
+                    return Err(invalid(
+                        "The file changed or failed its integrity check; it was not saved",
+                    ));
+                }
+                file.sync_all().await?;
+                drop(file);
+                let final_path = publish_file(&temp_path, &base, &name).await?;
+                drop(cleanup);
+                let _ = events.send(TransferEvent::IncomingComplete {
+                    id: hello.transfer_id.clone(),
+                    peer_id: hello.sender_id.clone(),
+                    name: final_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    path: Some(final_path),
+                    text: None,
+                    total_bytes: size,
+                });
+                let _ = channel.command(&Command::Ack).await;
+                Ok(())
+            }
+            _ => Err(invalid("Unexpected protocol command")),
+        }
+    }
+
+    /// Discovery metadata only. This method never transfers clipboard/file content.
+    pub async fn send_tcp_ping(
+        target: SocketAddr,
+        id: String,
+        name: String,
+        device_type: DeviceType,
+        tcp_port: u16,
+    ) -> io::Result<()> {
+        let bytes = serde_json::to_vec(&BeaconMessage {
+            id,
+            name,
+            device_type,
+            tcp_port,
+        })
+        .map_err(io::Error::other)?;
+        let mut stream = connect_with_retry(target, 1).await?;
+        bounded(async {
+            stream.write_all(PING_MAGIC).await?;
+            stream.write_u32(bytes.len() as u32).await?;
+            stream.write_all(&bytes).await
+        })
+        .await
+    }
+}
+
+struct TemporaryFile(PathBuf);
+struct DiskReservation<'a> {
+    reserved: &'a Mutex<u64>,
+    bytes: u64,
+}
+impl Drop for DiskReservation<'_> {
+    fn drop(&mut self) {
+        let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
+        *reserved = reserved.saturating_sub(self.bytes);
+    }
+}
+impl Drop for TemporaryFile {
+    fn drop(&mut self) {
+        if std::fs::remove_file(&self.0).is_err() && self.0.exists() {
+            // An in-flight Tokio file operation can briefly retain a Windows handle.
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let path = self.0.clone();
+                runtime.spawn(async move {
+                    for _ in 0..10 {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        if tokio::fs::remove_file(&path).await.is_ok() || !path.exists() {
+                            break;
+                        }
+                    }
+                });
+            }
+        }
+    }
+}
+
+async fn read_bounded_packet(stream: &mut TcpStream, maximum: usize) -> io::Result<Vec<u8>> {
+    bounded(async {
+        let size = stream.read_u32().await? as usize;
+        if size == 0 || size > maximum {
+            return Err(invalid("Invalid protocol header size"));
+        }
+        let mut bytes = vec![0u8; size];
+        stream.read_exact(&mut bytes).await?;
+        Ok(bytes)
+    })
+    .await
+}
+
+async fn publish_file(temporary: &Path, base: &Path, name: &str) -> io::Result<PathBuf> {
+    let original = Path::new(name);
+    let stem = original.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = original
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    for index in 0..10_000 {
+        let filename = if index == 0 {
+            name.to_owned()
+        } else {
+            format!("{stem} ({index}){extension}")
+        };
+        let target = base.join(filename);
+        // The OS primitive atomically fails on collision; there is no check/rename race.
+        let source = temporary.to_owned();
+        let destination = target.clone();
+        match tokio::task::spawn_blocking(move || publish_no_replace(&source, &destination))
+            .await
+            .map_err(io::Error::other)?
+        {
+            Ok(()) => return Ok(target),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(error(
+        io::ErrorKind::AlreadyExists,
+        "Too many files share this name",
+    ))
+}
+
+#[cfg(windows)]
+fn publish_no_replace(source: &Path, target: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(source: *const u16, target: *const u16, flags: u32) -> i32;
+    }
+    let from: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    // MOVEFILE_WRITE_THROUGH; deliberately omit MOVEFILE_REPLACE_EXISTING.
+    let moved = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 8) };
+    if moved != 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn publish_no_replace(source: &Path, target: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let from = std::ffi::CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| invalid("Invalid source path"))?;
+    let to = std::ffi::CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| invalid("Invalid destination path"))?;
+    // Direct syscall also works on Android API levels whose libc lacks renameat2.
+    let moved = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            1u32,
+        )
+    };
+    if moved == 0 {
+        return Ok(());
+    }
+    let problem = io::Error::last_os_error();
+    if problem.raw_os_error() == Some(libc::ENOSYS) || problem.raw_os_error() == Some(libc::EINVAL)
+    {
+        // Older kernels: hard-link creation has the same no-replace guarantee.
+        std::fs::hard_link(source, target)?;
+        let _ = std::fs::remove_file(source);
+        Ok(())
+    } else {
+        Err(problem)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn publish_no_replace(source: &Path, target: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let from = std::ffi::CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| invalid("Invalid source path"))?;
+    let to = std::ffi::CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| invalid("Invalid destination path"))?;
+    let moved = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    if moved == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos"
+)))]
+fn publish_no_replace(source: &Path, target: &Path) -> io::Result<()> {
+    std::fs::hard_link(source, target)?;
+    let _ = std::fs::remove_file(source);
+    Ok(())
+}
+
+pub fn sanitize_filename(input: &str) -> String {
+    let basename = input.rsplit(['/', '\\']).next().unwrap_or_default();
+    let filtered: String = basename.chars().filter(|c| !c.is_control() && !matches!(c, '<'|'>'|':'|'"'|'/'|'\\'|'|'|'?'|'*'|'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}')).collect();
+    let clean = filtered.trim().trim_matches('.').trim();
+    let clean = if clean.is_empty() { "file" } else { clean };
+    let path = Path::new(clean);
+    let stem: String = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .chars()
+        .take(70)
+        .collect();
+    let stem = stem.trim_end_matches([' ', '.']);
+    let mut stem_bytes = 0;
+    let stem: String = stem
+        .chars()
+        .take_while(|character| {
+            stem_bytes += character.len_utf8();
+            stem_bytes <= 180
+        })
+        .collect();
+    let extension: String = path
+        .extension()
+        .map(|e| e.to_string_lossy().chars().take(16).collect())
+        .unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
+    let reserved = matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
+    ) || upper
+        .strip_prefix("COM")
+        .or_else(|| upper.strip_prefix("LPT"))
+        .is_some_and(|number| {
+            number.chars().count() == 1
+                && number
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³'))
+        });
+    format!(
+        "{}{}{}",
+        if reserved { "_" } else { "" },
+        stem,
+        if extension.is_empty() {
+            String::new()
+        } else {
+            format!(".{extension}")
+        }
+    )
+}
+
+fn transfer_rate(done: u64, total: u64, start: Instant) -> (f64, u64) {
+    let bytes_per_second = done as f64 / start.elapsed().as_secs_f64().max(0.001);
+    (
+        bytes_per_second / (1024.0 * 1024.0),
+        if bytes_per_second > 0.0 {
+            ((total.saturating_sub(done)) as f64 / bytes_per_second) as u64
+        } else {
+            0
+        },
+    )
+}
+
+pub async fn connect_with_retry(target: SocketAddr, attempts: usize) -> io::Result<TcpStream> {
+    let mut last = error(
+        io::ErrorKind::NotConnected,
+        "The selected device is unavailable",
+    );
+    for attempt in 0..attempts {
+        match tokio::time::timeout(Duration::from_millis(2500), TcpStream::connect(target)).await {
+            Ok(Ok(stream)) => {
+                stream.set_nodelay(true)?;
+                return Ok(stream);
+            }
+            Ok(Err(e)) => last = e,
+            Err(_) => last = error(io::ErrorKind::TimedOut, "Connection timed out"),
+        }
+        if attempt + 1 < attempts {
+            tokio::time::sleep(Duration::from_millis(100 * (1 << attempt.min(4)))).await;
+        }
+    }
+    Err(last)
+}
+
 pub fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.0} KB", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {
@@ -133,985 +948,102 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
-
-/// تنسيق حالة النقل اللحظية مع عداد السرعة والوقت المتبقي بدقة
-pub fn format_transfer_status(current_bytes: u64, total_bytes: u64, speed_mb_s: f64, eta_secs: u64) -> String {
-    let cur_str = format_bytes(current_bytes);
-    let tot_str = format_bytes(total_bytes);
-    if total_bytes == 0 {
-        return "Complete".to_string();
-    }
-    if eta_secs > 0 && speed_mb_s > 0.05 {
-        if eta_secs >= 60 {
-            let mins = eta_secs / 60;
-            let secs = eta_secs % 60;
-            format!("{}/{}  {:.1} MB/s ({}m{}s)", cur_str, tot_str, speed_mb_s, mins, secs)
-        } else {
-            format!("{}/{}  {:.1} MB/s ({}s)", cur_str, tot_str, speed_mb_s, eta_secs)
-        }
-    } else if speed_mb_s > 0.05 {
-        format!("{}/{}  {:.1} MB/s", cur_str, tot_str, speed_mb_s)
-    } else {
-        format!("{}/{}", cur_str, tot_str)
-    }
+pub fn format_transfer_status(current: u64, total: u64, speed: f64, eta: u64) -> String {
+    format!(
+        "{} / {} · {:.1} MB/s · {}s",
+        format_bytes(current),
+        format_bytes(total),
+        speed,
+        eta
+    )
 }
 
-/// استعلام مباشر من نظام التشغيل عن السعة التخزينية المتاحة قبل قبول أي ملف
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 pub fn get_available_disk_space(path: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
-    let mut free_bytes_available: u64 = 0;
-    let mut total_number_of_bytes: u64 = 0;
-    let mut total_number_of_free_bytes: u64 = 0;
-    let dir = if path.is_file() {
-        path.parent().unwrap_or(path)
-    } else {
-        path
-    };
-    let wide_path: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-
+    #[link(name = "kernel32")]
     extern "system" {
         fn GetDiskFreeSpaceExW(
-            lpDirectoryName: *const u16,
-            lpFreeBytesAvailableToCaller: *mut u64,
-            lpTotalNumberOfBytes: *mut u64,
-            lpTotalNumberOfFreeBytes: *mut u64,
+            path: *const u16,
+            available: *mut u64,
+            total: *mut u64,
+            free: *mut u64,
         ) -> i32;
     }
-
-    let res = unsafe {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0;
+    let success = unsafe {
         GetDiskFreeSpaceExW(
-            wide_path.as_ptr(),
-            &mut free_bytes_available,
-            &mut total_number_of_bytes,
-            &mut total_number_of_free_bytes,
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
-    if res != 0 {
-        Some(free_bytes_available)
-    } else {
-        None
-    }
+    (success != 0).then_some(available)
 }
-
-#[cfg(not(target_os = "windows"))]
+#[cfg(unix)]
+pub fn get_available_disk_space(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut statistics = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(path.as_ptr(), statistics.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let statistics = unsafe { statistics.assume_init() };
+    (statistics.f_bavail as u64).checked_mul(statistics.f_frsize as u64)
+}
+#[cfg(not(any(windows, unix)))]
 pub fn get_available_disk_space(_path: &Path) -> Option<u64> {
     None
 }
 
-/// فحص صارم لصندوق الرمل لمنع هجمات الروابط الرمزية (Symlink Traversal Attacks)
-pub fn verify_path_sandbox(base_dir: &Path, target_path: &Path) -> Result<PathBuf, String> {
-    if let (Ok(can_base), Ok(can_parent)) = (base_dir.canonicalize(), target_path.parent().unwrap_or(base_dir).canonicalize()) {
-        if !can_parent.starts_with(&can_base) {
-            return Err("Security Alert: Path escapes download sandbox (Symlink/Junction traversal blocked)".into());
-        }
-    }
-    Ok(target_path.to_path_buf())
-}
-
-pub struct TransferManager {
-    pub port: u16,
-    pub download_dir: PathBuf,
-    pub connection_limiter: Arc<tokio::sync::Semaphore>,
-    pub trust_manager: Option<Arc<TrustManager>>,
-    pub cancel_token: Option<Arc<AtomicBool>>,
-}
-
-impl TransferManager {
-    /// تنظيف وحذف الملفات المؤقتة اليتيمة (.flowpart) المتخلفة عن جلسات سابقة أو انهيارات غير متوقعة
-    pub fn purge_orphaned_flowparts(download_dir: &Path) {
-        if let Ok(entries) = std::fs::read_dir(download_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "flowpart" {
-                            let _ = std::fs::remove_file(path);
-                        }
-                    }
-                }
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn safe_names_preserve_unicode_and_extensions() {
+        assert_eq!(sanitize_filename("../../صورة (1).png"), "صورة (1).png");
+        assert_eq!(sanitize_filename("C:\\folder\\CON.txt"), "_CON.txt");
+        assert_eq!(sanitize_filename("evil:stream?.txt"), "evilstream.txt");
+        assert_eq!(sanitize_filename(" ... "), "file");
+        assert!(sanitize_filename(&format!("{}.pdf", "a".repeat(200))).ends_with(".pdf"));
+        assert!(sanitize_filename(&format!("{}.png", "📁".repeat(100))).len() < 255);
+        assert_eq!(sanitize_filename("COM¹.txt"), "_COM¹.txt");
     }
 
-    pub fn new(port: u16, download_dir: PathBuf) -> Self {
-        Self::purge_orphaned_flowparts(&download_dir);
-        Self {
-            port,
-            download_dir,
-            connection_limiter: Arc::new(tokio::sync::Semaphore::new(16)),
-            trust_manager: None,
-            cancel_token: None,
-        }
-    }
-
-    pub fn with_trust(port: u16, download_dir: PathBuf, trust: Arc<TrustManager>) -> Self {
-        Self::purge_orphaned_flowparts(&download_dir);
-        Self {
-            port,
-            download_dir,
-            connection_limiter: Arc::new(tokio::sync::Semaphore::new(16)),
-            trust_manager: Some(trust),
-            cancel_token: None,
-        }
-    }
-
-    pub fn with_cancellation(mut self, cancel: Arc<AtomicBool>) -> Self {
-        self.cancel_token = Some(cancel);
-        self
-    }
-
-    /// يبدأ سيرفر استقبال الملفات والحافظة المباشر
-    pub async fn start_receiver(
-        self: Arc<Self>,
-        event_sender: mpsc::UnboundedSender<TransferEvent>,
-    ) -> Result<(), std::io::Error> {
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port)).await?;
-        self.start_with_listener(listener, event_sender).await;
-        Ok(())
-    }
-
-    /// يبدأ السيرفر باستخدام مستمع منفذ جاهز (مفيد للمنافذ الديناميكية ومنع تعارض الأجهزة وتحديد سقف الاتصالات)
-    pub async fn start_with_listener(
-        self: Arc<Self>,
-        listener: TcpListener,
-        event_sender: mpsc::UnboundedSender<TransferEvent>,
-    ) {
-        tokio::spawn(async move {
-            loop {
-                match listener.accept().await {
-                    Ok((stream, _addr)) => {
-                        let _ = stream.set_nodelay(true);
-                        let manager = self.clone();
-                        let sender = event_sender.clone();
-                        let permit = match manager.connection_limiter.clone().try_acquire_owned() {
-                            Ok(p) => p,
-                            Err(_) => {
-                                eprintln!("[Transfer] Connection rejected: maximum concurrent transfers reached (DoS protection)");
-                                continue;
-                            }
-                        };
-                        tokio::spawn(async move {
-                            let _permit = permit;
-                            if let Err(e) = manager.handle_incoming(stream, sender).await {
-                                eprintln!("[Transfer] Connection error: {:?}", e);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("[Transfer] Accept error: {:?}", e);
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                }
-            }
+    #[tokio::test]
+    async fn frame_sequence_rejects_replayed_authenticated_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut channel = SecureChannel::new(stream, &[7; 32], &[9; 32], b"context", false);
+            assert_eq!(channel.read(128).await.unwrap(), b"first");
+            assert!(channel.read(128).await.is_err());
         });
-    }
-
-    pub async fn handle_incoming(
-        &self,
-        mut stream: TcpStream,
-        sender: mpsc::UnboundedSender<TransferEvent>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let peer_addr = stream.peer_addr()?;
-        // 1. قراءة طول الهيدر مع فحص أمني ضد هجمات DoS مع مهلة شبكية
-        let header_len = tokio::time::timeout(NETWORK_TIMEOUT, stream.read_u32())
-            .await
-            .map_err(|_| "Network Timeout: Connection timed out waiting for packet header")?? as usize;
-
-        if header_len > MAX_HEADER_SIZE {
-            return Err("Security Alert: Header exceeds maximum allowed size (DoS protection)".into());
-        }
-
-        let mut header_buf = vec![0u8; header_len];
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.read_exact(&mut header_buf))
-            .await
-            .map_err(|_| "Network Timeout: Connection timed out reading packet header bytes")??;
-
-        let header: PacketHeader = serde_json::from_slice(&header_buf)?;
-
-        // 2. التحقق من الثقة والاقتران الأمني
-        if let Some(ref tm) = self.trust_manager {
-            if !tm.auto_accept().await {
-                let is_trusted = match &header {
-                    PacketHeader::FileOffer { sender_id, .. } => {
-                        if let Some(sid) = sender_id {
-                            tm.is_trusted(sid).await
-                        } else {
-                            false
-                        }
-                    }
-                    PacketHeader::ResumeQuery { sender_id, .. } => {
-                        if let Some(sid) = sender_id {
-                            tm.is_trusted(sid).await
-                        } else {
-                            false
-                        }
-                    }
-                    PacketHeader::EncryptedPayload { sender_id, .. } => {
-                        if let Some(sid) = sender_id {
-                            tm.is_trusted(sid).await
-                        } else {
-                            false
-                        }
-                    }
-                    PacketHeader::ClipboardText { sender_id, .. } => {
-                        if let Some(sid) = sender_id {
-                            tm.is_trusted(sid).await
-                        } else {
-                            false
-                        }
-                    }
-                    PacketHeader::ClipboardImage { sender_id, .. } => {
-                        if let Some(sid) = sender_id {
-                            tm.is_trusted(sid).await
-                        } else {
-                            false
-                        }
-                    }
-                    PacketHeader::PingAnnounce { .. } => true,
-                    PacketHeader::ResumeResponse { .. } => true,
-                };
-
-                if !is_trusted {
-                    let _ = sender.send(TransferEvent::Error("Incoming transfer rejected: Untrusted peer".into()));
-                    return Err("Security Alert: Connection rejected from untrusted peer".into());
-                }
-            }
-        }
-
-        match header {
-            PacketHeader::PingAnnounce { id, name, device_type, tcp_port } => {
-                let peer_ip = peer_addr.ip();
-                let peer = super::discovery::Peer {
-                    id,
-                    name,
-                    device_type,
-                    ip: peer_ip,
-                    tcp_port,
-                    last_seen: Instant::now(),
-                };
-                let _ = sender.send(TransferEvent::PeerDiscovered(peer));
-                return Ok(());
-            }
-            PacketHeader::ClipboardText { content, .. } => {
-                let _ = sender.send(TransferEvent::ClipboardReceived(content));
-            }
-            PacketHeader::ClipboardImage { width, height, data, .. } => {
-                let _ = sender.send(TransferEvent::ClipboardImageReceived {
-                    width,
-                    height,
-                    data,
-                });
-            }
-            PacketHeader::ResumeQuery { file_id, name, total_size, .. } => {
-                let raw_filename = Path::new(&name)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("received_file");
-                let part_pattern = format!("{}.{}.flowpart", raw_filename, file_id);
-                let part_path = self.download_dir.join(&part_pattern);
-
-                let existing_offset = if part_path.exists() {
-                    tokio::fs::metadata(&part_path).await.map(|m| m.len()).unwrap_or(0)
-                } else {
-                    0
-                };
-
-                let response = PacketHeader::ResumeResponse {
-                    file_id,
-                    offset: existing_offset,
-                    accepted: existing_offset > 0 && existing_offset < total_size,
-                };
-                let resp_bytes = serde_json::to_vec(&response)?;
-                tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(resp_bytes.len() as u32)).await??;
-                tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&resp_bytes)).await??;
-                tokio::time::timeout(NETWORK_TIMEOUT, stream.flush()).await??;
-                return Ok(());
-            }
-            PacketHeader::ResumeResponse { .. } => {
-                return Ok(());
-            }
-            PacketHeader::EncryptedPayload { nonce, ciphertext, timestamp_secs, sender_id } => {
-                // حماية ضد هجمات إعادة الإرسال (Anti-Replay Attack Protection) بمهلة 120 ثانية
-                if timestamp_secs > 0 {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    if now.abs_diff(timestamp_secs) > 120 {
-                        return Err("Security Alert: Expired or replayed encrypted payload (TTL > 120s)".into());
-                    }
-                }
-
-                let nonce_ref = Nonce::from(nonce);
-                let mut decrypted_opt = None;
-
-                // 1. محاولة فك التشفير بمفتاح النظير الثنائي (Pairwise E2EE Key) إذا توفر sender_id
-                if let Some(ref sid) = sender_id {
-                    if let Some(ref tm) = self.trust_manager {
-                        let pairwise_key = tm.get_key_for_peer(sid).await;
-                        let cipher = ChaCha20Poly1305::new(&pairwise_key.into());
-                        if let Ok(dec) = cipher.decrypt(&nonce_ref, ciphertext.as_ref()) {
-                            decrypted_opt = Some(dec);
-                        }
-                    }
-                }
-
-                // 2. المحاولة البديلة عبر Master Key أو المفتاح المرجعي
-                if decrypted_opt.is_none() {
-                    let key = if let Some(ref tm) = self.trust_manager {
-                        tm.get_master_key().await
-                    } else {
-                        [0x42u8; 32]
-                    };
-                    let cipher = ChaCha20Poly1305::new(&key.into());
-                    if let Ok(dec) = cipher.decrypt(&nonce_ref, ciphertext.as_ref()) {
-                        decrypted_opt = Some(dec);
-                    }
-                }
-
-                if let Some(decrypted) = decrypted_opt {
-                    if let Ok(text) = String::from_utf8(decrypted) {
-                        let _ = sender.send(TransferEvent::ClipboardReceived(text));
-                    }
-                }
-            }
-            PacketHeader::FileOffer { name, size, sha256, file_id, offset, .. } => {
-                // فحص الحجم الأقصى للملف لحماية القرص من الاستنزاف
-                if size > MAX_FILE_SIZE {
-                    return Err("Security Alert: Offered file exceeds maximum allowed transfer size of 50 GB (Disk exhaustion protection)".into());
-                }
-
-                // فحص السعة الشاغرة في القرص مسبقاً لمنع ملء وحدة التخزين (Pre-flight Disk Check)
-                if let Some(free_space) = get_available_disk_space(&self.download_dir) {
-                    let required = size.saturating_sub(offset);
-                    if free_space < required {
-                        let err = format!(
-                            "Storage Alert: Insufficient disk space on target drive (required {:.1} MB, available {:.1} MB)",
-                            required as f64 / (1024.0 * 1024.0),
-                            free_space as f64 / (1024.0 * 1024.0)
-                        );
-                        let _ = sender.send(TransferEvent::Error(err.clone()));
-                        return Err(err.into());
-                    }
-                }
-
-                // حماية قصوى ضد ثغرة Path Traversal وحظر المحارف غير القانونية لأنظمة التشغيل
-                let raw_filename = Path::new(&name)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("received_file");
-
-                let filtered: String = raw_filename
-                    .chars()
-                    .filter(|c| {
-                        !c.is_control()
-                            && *c != '/'
-                            && *c != '\\'
-                            && *c != ':'
-                            && *c != '*'
-                            && *c != '?'
-                            && *c != '"'
-                            && *c != '<'
-                            && *c != '>'
-                            && *c != '|'
-                            && *c != '\0'
-                    })
-                    .collect();
-
-                let trimmed = filtered.trim().trim_matches('.').to_string();
-
-                // حماية ضد أسماء أجهزة نظام ويندوز المحجوزة (DOS Device Names مثل CON, PRN, AUX, NUL)
-                let file_stem = Path::new(&trimmed)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-
-                let is_reserved = WINDOWS_RESERVED_NAMES
-                    .iter()
-                    .any(|&res| res.eq_ignore_ascii_case(file_stem));
-
-                let safe_name = if is_reserved {
-                    format!("safe_{}", trimmed)
-                } else if trimmed.is_empty() {
-                    "received_file".to_string()
-                } else if trimmed.len() > 100 {
-                    let ext = Path::new(&trimmed)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("");
-                    if ext.is_empty() {
-                        trimmed.chars().take(100).collect()
-                    } else {
-                        let stem: String = trimmed.chars().take(90).collect();
-                        format!("{}.{}", stem, ext)
-                    }
-                } else {
-                    trimmed
-                };
-
-                let _ = sender.send(TransferEvent::FileStart {
-                    name: safe_name.clone(),
-                    total_bytes: size,
-                });
-
-                std::fs::create_dir_all(&self.download_dir)?;
-
-                // منع الكتابة فوق ملفات موجودة بتوليد اسم فريد
-                let mut dest_path = self.download_dir.join(&safe_name);
-                if dest_path.exists() && offset == 0 {
-                    let stem = Path::new(&safe_name)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("file");
-                    let ext = Path::new(&safe_name)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("");
-
-                    let mut counter = 1;
-                    loop {
-                        let new_name = if ext.is_empty() {
-                            format!("{}_{}", stem, counter)
-                        } else {
-                            format!("{}_{}.{}", stem, counter, ext)
-                        };
-                        let candidate = self.download_dir.join(new_name);
-                        if !candidate.exists() {
-                            dest_path = candidate;
-                            break;
-                        }
-                        counter += 1;
-                    }
-                }
-
-                // تدقيق أمان صندوق الرمل للمسار الهدف
-                let dest_path = verify_path_sandbox(&self.download_dir, &dest_path)?;
-
-                let final_name = dest_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&safe_name)
-                    .to_string();
-
-                // الحفظ الذري واستئناف النقل الذكي (Resumable Part File Engine)
-                let fid = file_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()[..8].to_string());
-                let part_path = self.download_dir.join(format!("{}.{}.flowpart", final_name, fid));
-
-                let mut file = tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .truncate(false)
-                    .write(true)
-                    .read(true)
-                    .open(&part_path)
-                    .await?;
-
-                let mut hasher = Sha256::new();
-                let mut received: u64 = 0;
-
-                // إذا كان هناك استئناف من offset محدد
-                if offset > 0 {
-                    let meta_len = file.metadata().await?.len();
-                    let actual_offset = std::cmp::min(offset, meta_len);
-                    file.seek(std::io::SeekFrom::Start(actual_offset)).await?;
-                    received = actual_offset;
-
-                    // احتساب هاش البايتات المحملة مسبقاً
-                    if sha256.is_some() {
-                        let mut check_f = tokio::fs::File::open(&part_path).await?;
-                        let mut check_buf = vec![0u8; CHUNK_SIZE];
-                        let mut checked = 0u64;
-                        while checked < actual_offset {
-                            let to_read = std::cmp::min(check_buf.len() as u64, actual_offset - checked) as usize;
-                            let n = check_f.read(&mut check_buf[..to_read]).await?;
-                            if n == 0 {
-                                break;
-                            }
-                            hasher.update(&check_buf[..n]);
-                            checked += n as u64;
-                        }
-                    }
-                }
-
-                let mut buf = vec![0u8; CHUNK_SIZE];
-                let transfer_start = Instant::now();
-
-                let stream_result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
-                    while received < size {
-                        // فحص إشارة الإلغاء اللحظية
-                        if let Some(ref cancel) = self.cancel_token {
-                            if cancel.load(Ordering::Relaxed) {
-                                return Err("Transfer cancelled by user".into());
-                            }
-                        }
-
-                        let to_read = std::cmp::min(buf.len() as u64, size - received) as usize;
-                        let n = tokio::time::timeout(NETWORK_TIMEOUT, stream.read(&mut buf[..to_read]))
-                            .await
-                            .map_err(|_| "Network Timeout: File transfer stalled for more than 15 seconds")??;
-                        if n == 0 {
-                            return Err("Connection severed unexpectedly mid-transfer (EOF)".into());
-                        }
-                        file.write_all(&buf[..n]).await?;
-                        hasher.update(&buf[..n]);
-                        received += n as u64;
-
-                        // حساب السرعة الحية والوقت المتبقي
-                        let elapsed_secs = transfer_start.elapsed().as_secs_f64().max(0.001);
-                        let transferred_now = received.saturating_sub(offset);
-                        let speed_mb_s = (transferred_now as f64 / (1024.0 * 1024.0)) / elapsed_secs;
-                        let remaining_bytes = size - received;
-                        let speed_bytes_s = (transferred_now as f64) / elapsed_secs;
-                        let eta_secs = if speed_bytes_s > 0.0 {
-                            (remaining_bytes as f64 / speed_bytes_s) as u64
-                        } else {
-                            0
-                        };
-
-                        let _ = sender.send(TransferEvent::FileProgress {
-                            name: final_name.clone(),
-                            current_bytes: received,
-                            total_bytes: size,
-                            speed_mb_s,
-                            eta_secs,
-                        });
-                    }
-                    file.flush().await?;
-
-                    // التحقق من البصمة التشفيرية SHA-256
-                    if let Some(expected_sha) = sha256 {
-                        let hash_bytes = hasher.finalize();
-                        let actual_sha: String = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect();
-                        if actual_sha != expected_sha {
-                            return Err(format!(
-                                "Cryptographic Integrity Error: Checksum mismatch (expected {}, got {})",
-                                expected_sha, actual_sha
-                            ).into());
-                        }
-                    }
-
-                    Ok(())
-                }.await;
-
-                drop(file);
-
-                match stream_result {
-                    Ok(()) => {
-                        // حماية إضافية ضد سباق التسمية في ويندوز (Windows TOCTOU Rename Collision Fix)
-                        let mut final_target = dest_path.clone();
-                        if final_target.exists() && offset == 0 {
-                            let stem = Path::new(&safe_name)
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("file");
-                            let ext = Path::new(&safe_name)
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("");
-                            let mut counter = 1;
-                            loop {
-                                let new_name = if ext.is_empty() {
-                                    format!("{}_{}", stem, counter)
-                                } else {
-                                    format!("{}_{}.{}", stem, counter, ext)
-                                };
-                                let candidate = self.download_dir.join(new_name);
-                                if !candidate.exists() {
-                                    final_target = candidate;
-                                    break;
-                                }
-                                counter += 1;
-                            }
-                        }
-
-                        std::fs::rename(&part_path, &final_target)?;
-                        let final_saved_name = final_target
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(&safe_name)
-                            .to_string();
-
-                        let _ = sender.send(TransferEvent::FileComplete {
-                            name: final_saved_name,
-                            path: final_target,
-                        });
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        // إذا تم الإلغاء من المستخدم أو لم يكن الملف معلماً كجلسة استئناف، ننظف الملف المؤقت
-                        if err_str.contains("cancelled by user") || file_id.is_none() {
-                            let _ = std::fs::remove_file(&part_path);
-                        }
-                        let _ = sender.send(TransferEvent::Error(format!("Transfer aborted: {:?}", e)));
-                        return Err(e);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// إرسال نص الحافظة إلى جهاز آخر
-    pub async fn send_clipboard(
-        target: SocketAddr,
-        text: String,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Self::send_clipboard_with_sender(target, text, None).await
-    }
-
-    pub async fn send_clipboard_with_sender(
-        target: SocketAddr,
-        text: String,
-        sender_id: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = connect_with_retry(target, 3).await?;
-        let _ = stream.set_nodelay(true);
-        let header = PacketHeader::ClipboardText { content: text, sender_id };
-        let header_bytes = serde_json::to_vec(&header)?;
-
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(header_bytes.len() as u32))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write clipboard header length")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&header_bytes))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write clipboard header bytes")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.flush())
-            .await
-            .map_err(|_| "Network Timeout: Failed to flush clipboard stream")??;
-        Ok(())
-    }
-
-    /// إرسال صورة الحافظة / لقطة شاشة مباشرة عبر الشبكة
-    pub async fn send_clipboard_image(
-        target: SocketAddr,
-        width: usize,
-        height: usize,
-        data: Vec<u8>,
-        sender_id: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = connect_with_retry(target, 3).await?;
-        let _ = stream.set_nodelay(true);
-        let header = PacketHeader::ClipboardImage {
-            width,
-            height,
-            data,
-            sender_id,
-        };
-        let header_bytes = serde_json::to_vec(&header)?;
-
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(header_bytes.len() as u32))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write image header length")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&header_bytes))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write image header bytes")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.flush())
-            .await
-            .map_err(|_| "Network Timeout: Failed to flush image stream")??;
-        Ok(())
-    }
-
-    /// إرسال إعلان اكتشاف مباشر عبر TCP لتجاوز حظر البث اللاسلكي في موجهات وبطاقات هواتف أندرويد
-    pub async fn send_tcp_ping(
-        target: SocketAddr,
-        self_id: String,
-        self_name: String,
-        self_type: super::discovery::DeviceType,
-        self_port: u16,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = connect_with_retry(target, 2).await?;
-        let _ = stream.set_nodelay(true);
-        let header = PacketHeader::PingAnnounce {
-            id: self_id,
-            name: self_name,
-            device_type: self_type,
-            tcp_port: self_port,
-        };
-        let bytes = serde_json::to_vec(&header)?;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(bytes.len() as u32)).await??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&bytes)).await??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.flush()).await??;
-        Ok(())
-    }
-
-    /// إرسال نص مشفر بـ ChaCha20-Poly1305 مع توليد Nonce عشوائي غير مكرر وحماية ضد هجمات Replay
-    pub async fn send_encrypted_clipboard(
-        target: SocketAddr,
-        text: String,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Self::send_encrypted_clipboard_with_auth(target, text, None, None).await
-    }
-
-    pub async fn send_encrypted_clipboard_with_auth(
-        target: SocketAddr,
-        text: String,
-        sender_id: Option<String>,
-        key_opt: Option<[u8; 32]>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let key = key_opt.unwrap_or([0x42u8; 32]);
-        let cipher = ChaCha20Poly1305::new(&key.into());
-
-        let uuid_bytes = uuid::Uuid::new_v4();
-        let mut nonce = [0u8; 12];
-        nonce.copy_from_slice(&uuid_bytes.as_bytes()[0..12]);
-        let nonce_ref = Nonce::from(nonce);
-
-        let ciphertext = cipher
-            .encrypt(&nonce_ref, text.as_bytes())
-            .map_err(|e| format!("Encryption error: {:?}", e))?;
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let mut stream = connect_with_retry(target, 3).await?;
-        let _ = stream.set_nodelay(true);
-        let header = PacketHeader::EncryptedPayload {
-            nonce,
-            ciphertext,
-            sender_id,
-            timestamp_secs: now,
-        };
-        let header_bytes = serde_json::to_vec(&header)?;
-
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(header_bytes.len() as u32))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write encrypted header length")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&header_bytes))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write encrypted header bytes")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.flush())
-            .await
-            .map_err(|_| "Network Timeout: Failed to flush encrypted stream")??;
-        Ok(())
-    }
-
-    /// إرسال ملف مباشرة مع احتساب البصمة التشفيرية المسبقة SHA-256 للملفات مع مهلة كتابة شبكية
-    pub async fn send_file<F>(
-        target: SocketAddr,
-        file_path: &Path,
-        progress_cb: F,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        F: Fn(u64, u64, f64, u64) + Send + 'static,
-    {
-        Self::send_file_cancellable(target, file_path, None, None, progress_cb).await
-    }
-
-    pub async fn send_file_cancellable<F>(
-        target: SocketAddr,
-        file_path: &Path,
-        sender_id: Option<String>,
-        cancel_token: Option<Arc<AtomicBool>>,
-        progress_cb: F,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        F: Fn(u64, u64, f64, u64) + Send + 'static,
-    {
-        Self::send_file_resumable(target, file_path, sender_id, cancel_token, progress_cb).await
-    }
-
-    /// إرسال ملف مع دعم الاستئناف التلقائي الذكي من البايت المتبقي
-    pub async fn send_file_resumable<F>(
-        target: SocketAddr,
-        file_path: &Path,
-        sender_id: Option<String>,
-        cancel_token: Option<Arc<AtomicBool>>,
-        progress_cb: F,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        F: Fn(u64, u64, f64, u64) + Send + 'static,
-    {
-        let filename = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file.bin")
-            .to_string();
-        let metadata = tokio::fs::metadata(file_path).await?;
-        let total_size = metadata.len();
-
-        let file_id = {
-            let mut h = Sha256::new();
-            h.update(filename.as_bytes());
-            h.update(total_size.to_le_bytes());
-            let hash = h.finalize();
-            hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>()
-        };
-
-        let mut offset = 0u64;
-
-        // إذا كان الملف أكبر من 5 ميجابايت، نستعلم أولاً هل لدى المستقبل جزء محمل مسبقاً لاستئنافه
-        if total_size > 5 * 1024 * 1024 {
-            if let Ok(mut query_stream) = connect_with_retry(target, 2).await {
-                let _ = query_stream.set_nodelay(true);
-                let query = PacketHeader::ResumeQuery {
-                    file_id: file_id.clone(),
-                    name: filename.clone(),
-                    total_size,
-                    sender_id: sender_id.clone(),
-                };
-                if let Ok(query_bytes) = serde_json::to_vec(&query) {
-                    let _ = query_stream.write_u32(query_bytes.len() as u32).await;
-                    let _ = query_stream.write_all(&query_bytes).await;
-                    let _ = query_stream.flush().await;
-
-                    if let Ok(Ok(resp_len)) = tokio::time::timeout(Duration::from_secs(2), query_stream.read_u32()).await {
-                        let mut resp_buf = vec![0u8; resp_len as usize];
-                        if tokio::time::timeout(Duration::from_secs(2), query_stream.read_exact(&mut resp_buf)).await.is_ok() {
-                            if let Ok(PacketHeader::ResumeResponse { offset: existing, accepted, .. }) = serde_json::from_slice(&resp_buf) {
-                                if accepted && existing > 0 && existing < total_size {
-                                    offset = existing;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Self::send_file_at_offset(target, file_path, sender_id, Some(file_id), offset, cancel_token, progress_cb).await
-    }
-
-    pub async fn send_file_at_offset<F>(
-        target: SocketAddr,
-        file_path: &Path,
-        sender_id: Option<String>,
-        file_id: Option<String>,
-        offset: u64,
-        cancel_token: Option<Arc<AtomicBool>>,
-        progress_cb: F,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        F: Fn(u64, u64, f64, u64) + Send + 'static,
-    {
-        let mut file = tokio::fs::File::open(file_path).await?;
-        let metadata = file.metadata().await?;
-        let total_size = metadata.len();
-        let filename = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file.bin")
-            .to_string();
-
-        let sha256_hash = if total_size <= 100 * 1024 * 1024 {
-            let mut hasher = Sha256::new();
-            let mut check_file = tokio::fs::File::open(file_path).await?;
-            let mut check_buf = vec![0u8; CHUNK_SIZE];
-            loop {
-                let n = check_file.read(&mut check_buf).await?;
-                if n == 0 {
-                    break;
-                }
-                hasher.update(&check_buf[..n]);
-            }
-            let hash_bytes = hasher.finalize();
-            Some(hash_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-        } else {
-            None
-        };
-
-        let mut stream = connect_with_retry(target, 3).await?;
-        let _ = stream.set_nodelay(true);
-        let header = PacketHeader::FileOffer {
-            name: filename,
-            size: total_size,
-            sha256: sha256_hash,
-            sender_id,
-            file_id,
-            offset,
-        };
-        let header_bytes = serde_json::to_vec(&header)?;
-
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_u32(header_bytes.len() as u32))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write file offer header size within 15s")??;
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&header_bytes))
-            .await
-            .map_err(|_| "Network Timeout: Failed to write file offer header bytes within 15s")??;
-
-        if offset > 0 {
-            file.seek(std::io::SeekFrom::Start(offset)).await?;
-        }
-
-        let mut sent: u64 = offset;
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        let start_time = Instant::now();
-
-        while sent < total_size {
-            if let Some(ref cancel) = cancel_token {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("Send operation cancelled by user".into());
-                }
-            }
-
-            let to_read = std::cmp::min(buf.len() as u64, total_size - sent) as usize;
-            let n = file.read(&mut buf[..to_read]).await?;
-            if n == 0 {
-                break;
-            }
-            tokio::time::timeout(NETWORK_TIMEOUT, stream.write_all(&buf[..n]))
+        let stream = TcpStream::connect(address).await.unwrap();
+        let mut channel = SecureChannel::new(stream, &[7; 32], &[9; 32], b"context", true);
+        let nonce = random_bytes::<12>();
+        let ciphertext = channel
+            .cipher
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: b"first",
+                    aad: &channel.aad(true, 0),
+                },
+            )
+            .unwrap();
+        for _ in 0..2 {
+            channel
+                .stream
+                .write_u32((ciphertext.len() + 12) as u32)
                 .await
-                .map_err(|_| "Network Timeout: Sender stalled writing file chunk for more than 15 seconds")??;
-            sent += n as u64;
-
-            let elapsed_secs = start_time.elapsed().as_secs_f64().max(0.001);
-            let transferred_now = sent.saturating_sub(offset);
-            let speed_mb_s = (transferred_now as f64 / (1024.0 * 1024.0)) / elapsed_secs;
-            let remaining_bytes = total_size - sent;
-            let speed_bytes_s = (transferred_now as f64) / elapsed_secs;
-            let eta_secs = if speed_bytes_s > 0.0 {
-                (remaining_bytes as f64 / speed_bytes_s) as u64
-            } else {
-                0
-            };
-
-            progress_cb(sent, total_size, speed_mb_s, eta_secs);
+                .unwrap();
+            channel.stream.write_all(&nonce).await.unwrap();
+            channel.stream.write_all(&ciphertext).await.unwrap();
         }
-
-        tokio::time::timeout(NETWORK_TIMEOUT, stream.flush())
-            .await
-            .map_err(|_| "Network Timeout: Sender stalled flushing file stream for more than 15 seconds")??;
-        Ok(())
-    }
-
-    /// إرسال حزمة ملفات متعددة بالتتابع مع متابعة تقدم كل ملف ومجموع الحزمة ودعم الإلغاء اللحظي
-    pub async fn send_multiple_files<F>(
-        target: SocketAddr,
-        file_paths: &[PathBuf],
-        progress_cb: F,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        F: Fn(usize, usize, u64, u64, f64, u64) + Send + Clone + 'static,
-    {
-        Self::send_multiple_files_cancellable(target, file_paths, None, None, progress_cb).await
-    }
-
-    pub async fn send_multiple_files_cancellable<F>(
-        target: SocketAddr,
-        file_paths: &[PathBuf],
-        sender_id: Option<String>,
-        cancel_token: Option<Arc<AtomicBool>>,
-        progress_cb: F,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        F: Fn(usize, usize, u64, u64, f64, u64) + Send + Clone + 'static,
-    {
-        let total_files = file_paths.len();
-        for (idx, path) in file_paths.iter().enumerate() {
-            if let Some(ref cancel) = cancel_token {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("Batch transfer cancelled by user".into());
-                }
-            }
-            let cb = progress_cb.clone();
-            let c_tok = cancel_token.clone();
-            let s_id = sender_id.clone();
-            Self::send_file_resumable(target, path, s_id, c_tok, move |sent, total, speed, eta| {
-                cb(idx + 1, total_files, sent, total, speed, eta);
-            }).await?;
-        }
-        Ok(())
+        server.await.unwrap();
     }
 }

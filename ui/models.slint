@@ -1,14 +1,14 @@
-export struct HistoryItem {
-    id: string,
-    kind: string,
-    title: string,
-    subtitle: string,
-    timestamp: string,
-    success: bool,
+export struct PeerItem {
+    id: string, name: string, kind: string, selected: bool, trusted: bool,
 }
-
+export struct TransferItem {
+    id: string, title: string, detail: string, progress: float,
+    status: string, direction: string, can_cancel: bool,
+}
+export struct HistoryItem {
+    id: string, kind: string, title: string, subtitle: string,
+    timestamp: string, success: bool, action_label: string,
+}
 export struct FilePickerItem {
-    path: string,
-    name: string,
-    size_str: string,
+    path: string, name: string, detail: string, is_dir: bool, selected: bool,
 }

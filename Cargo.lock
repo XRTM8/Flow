@@ -3418,11 +3418,12 @@ dependencies = [
 
 [[package]]
 name = "otium-flow"
-version = "2.4.0"
+version = "2.4.2"
 dependencies = [
  "arboard",
  "chacha20poly1305",
  "jni 0.21.1",
+ "libc",
  "ndk-context",
  "rfd",
  "serde",
@@ -4313,6 +4314,7 @@ dependencies = [
  "i-slint-backend-android-activity",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",

@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Reference manifest. cargo-apk generates its manifest from Cargo.toml metadata. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.otium.flow"
-    android:versionCode="7"
-    android:versionName="2.4.0">
+    android:versionCode="16909314"
+    android:versionName="2.4.2">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -28,7 +29,7 @@
         android:icon="@mipmap/ic_launcher"
         android:hasCode="false"
         android:requestLegacyExternalStorage="true"
-        android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
             android:name="android.app.NativeActivity"

@@ -1,67 +1,67 @@
-use otium_flow::protocol::transfer::{TransferEvent, TransferManager};
-use std::net::SocketAddr;
+//! Optional throughput measurement; correctness is covered by security_and_flow_tests.
+use otium_flow::protocol::{TransferManager, TrustManager};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 #[tokio::test]
-async fn test_10mb_high_throughput_file_benchmark() {
-    let base_dir = std::env::temp_dir().join(format!("flow_bench_{}", uuid::Uuid::new_v4()));
-    let src_dir = base_dir.join("src");
-    let dest_dir = base_dir.join("dest");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    std::fs::create_dir_all(&dest_dir).unwrap();
-
-    let test_port = 57121;
-    let (tx, mut rx) = mpsc::unbounded_channel::<TransferEvent>();
-    let manager = Arc::new(TransferManager::new(test_port, dest_dir.clone()));
-    manager.clone().start_receiver(tx).await.unwrap();
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // توليد ملف اختباري بحجم 10 ميجابايت (10 * 1024 * 1024 بايت)
-    let size_bytes: usize = 10 * 1024 * 1024;
-    let test_file = src_dir.join("large_archive.iso");
-
-    let mut mock_data = Vec::with_capacity(size_bytes);
-    for i in 0..size_bytes {
-        mock_data.push((i % 251) as u8);
-    }
-    std::fs::write(&test_file, &mock_data).unwrap();
-
-    let target: SocketAddr = format!("127.0.0.1:{}", test_port).parse().unwrap();
-
-    // بدء قياس سرعة النقل الحقيقية
-    let start_time = Instant::now();
-
-    TransferManager::send_file(target, &test_file, |_sent, _total, _speed, _eta| {})
+#[ignore = "explicit local throughput measurement, not a portable performance guarantee"]
+async fn encrypted_10mb_loopback_measurement() {
+    let base = std::env::temp_dir().join(format!("flow-benchmark-{}", uuid::Uuid::new_v4()));
+    let a = Arc::new(
+        TrustManager::try_with_self_id(base.join("a"), uuid::Uuid::new_v4().to_string()).unwrap(),
+    );
+    let b = Arc::new(
+        TrustManager::try_with_self_id(base.join("b"), uuid::Uuid::new_v4().to_string()).unwrap(),
+    );
+    a.trust_peer_with_secret(b.self_id().into(), "B".into(), &b.pairing_code().await)
         .await
         .unwrap();
-
-    // انتظار اكتمال التدفق والحفظ الذري
-    while let Some(event) = rx.recv().await {
-        if let TransferEvent::FileComplete { name, path } = event {
-            let duration = start_time.elapsed();
-            let duration_secs = duration.as_secs_f64();
-            let mb_transferred = size_bytes as f64 / (1024.0 * 1024.0);
-            let speed_mb_s = mb_transferred / duration_secs;
-
-            println!("\n==========================================");
-            println!("⚡ [FLOW BENCHMARK 10MB RESULTS]");
-            println!("Transferred: {:.2} MB in {:.3} seconds", mb_transferred, duration_secs);
-            println!("Throughput Speed: {:.2} MB/s", speed_mb_s);
-            println!("==========================================\n");
-
-            assert_eq!(name, "large_archive.iso");
-            assert!(path.exists());
-            assert_eq!(std::fs::metadata(&path).unwrap().len(), size_bytes as u64);
-
-            // التحقق من سلامة البايتات كاملة
-            let received_data = std::fs::read(&path).unwrap();
-            assert_eq!(received_data, mock_data);
-            break;
-        }
+    b.trust_peer_with_secret(a.self_id().into(), "A".into(), &a.pairing_code().await)
+        .await
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let receiver = Arc::new(TransferManager::with_trust(
+        address.port(),
+        base.join("received"),
+        b.clone(),
+    ));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    receiver.start_with_listener(listener, tx).await;
+    let sender = TransferManager::with_trust(0, base.join("source"), a);
+    let source = base.join("payload.bin");
+    let data: Vec<u8> = (0..10 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&source, &data).unwrap();
+    let started = Instant::now();
+    sender
+        .send_secure_file(
+            address,
+            b.self_id(),
+            &source,
+            &uuid::Uuid::new_v4().to_string(),
+            Arc::new(AtomicBool::new(false)),
+            |_, _, _, _| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(base.join("received/payload.bin")).unwrap(),
+        data
+    );
+    eprintln!(
+        "Encrypted 10 MB loopback: {:.2} MB/s",
+        10.0 / started.elapsed().as_secs_f64()
+    );
+    if base.parent() == Some(std::env::temp_dir().as_path())
+        && base
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("flow-benchmark-")
+    {
+        let _ = std::fs::remove_dir_all(base);
     }
-
-    let _ = std::fs::remove_dir_all(&base_dir);
 }
