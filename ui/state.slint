@@ -4,7 +4,7 @@ export global AppState {
     in-out property <bool> mobile_mode: false;
     in-out property <bool> compact_mode: false;
     in-out property <bool> native_glass: false;
-    in-out property <string> app_version: "2.4.2";
+    in-out property <string> app_version: "2.4.3";
     in-out property <string> lang: "EN";
     out property <bool> rtl: lang == "AR";
     in-out property <[PeerItem]> peers: [];
@@ -38,6 +38,11 @@ export global AppState {
     in-out property <bool> busy: false;
     in-out property <bool> update_available: false;
     in-out property <string> update_version: "";
+    in-out property <bool> update_busy: false;
+    in-out property <bool> update_blocked: false;
+    in-out property <bool> update_waiting_confirmation: false;
+    in-out property <string> update_status: "";
+    in-out property <bool> update_error: false;
     in-out property <bool> show_file_picker: false;
     in-out property <bool> browser_read_only: false;
     in-out property <string> browser_path: "";
@@ -60,6 +65,9 @@ export global AppState {
     callback forget_device(string);
     callback open_downloads();
     callback open_update();
+    callback check_updates();
+    callback apply_update();
+    callback resume_after_update();
     callback dismiss_notice();
     callback refresh_devices();
     callback copy_pairing_code();

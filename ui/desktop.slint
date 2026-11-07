@@ -258,9 +258,48 @@ component SettingsPage inherits ScrollView {
                 }
             }
         }
-        FlowRow {
-            SmallText { text: "Flow · " + AppState.app_version; color: Theme.muted; horizontal-stretch: 1; }
-            FlowButton { text: AppState.rtl ? "الإصدارات" : "Releases"; quiet: true; clicked => { AppState.open_update(); } }
+        Panel {
+            VerticalLayout {
+                padding: 20px; spacing: 14px;
+                FlowRow {
+                    BodyText { text: AppState.rtl ? "التحديثات" : "Updates"; font-weight: 600; horizontal-stretch: 1; }
+                    FlowButton { text: AppState.rtl ? "الإصدارات" : "Releases"; quiet: true; clicked => { AppState.open_update(); } }
+                }
+                SmallText { text: AppState.rtl ? "الإصدار الحالي: " + AppState.app_version : "Current version: " + AppState.app_version; }
+                if AppState.update_available : BodyText {
+                    text: AppState.rtl ? "إصدار متاح: " + AppState.update_version : "Available version: " + AppState.update_version;
+                    font-weight: 600;
+                }
+                SmallText {
+                    text: AppState.update_status != "" ? AppState.update_status : (AppState.rtl ? "افحص وجود إصدار أحدث من Flow." : "Check for a newer version of Flow.");
+                    color: AppState.update_error ? Theme.error : Theme.secondary;
+                    wrap: word-wrap;
+                }
+                FlexboxLayout {
+                    flex-direction: AppState.mobile_mode || AppState.compact_mode ? column : (AppState.rtl ? row-reverse : row);
+                    flex-wrap: no-wrap; alignment: stretch; cross-axis-alignment: stretch; spacing: 10px;
+                    FlowButton {
+                        text: AppState.update_busy ? (AppState.rtl ? "يرجى الانتظار…" : "Please wait…") : (AppState.rtl ? "فحص التحديثات" : "Check for updates");
+                        icon: @image-url("../assets/icons/refresh.svg");
+                        enabled: !AppState.update_busy && !AppState.update_waiting_confirmation; horizontal-stretch: 1;
+                        clicked => { AppState.check_updates(); }
+                    }
+                    if AppState.update_available : FlowButton {
+                        text: AppState.rtl ? "تثبيت التحديث" : "Install update";
+                        primary: true; horizontal-stretch: 1;
+                        enabled: !AppState.update_busy && !AppState.update_blocked && !AppState.update_waiting_confirmation;
+                        clicked => { AppState.apply_update(); }
+                    }
+                }
+                if AppState.update_waiting_confirmation : FlowButton {
+                    text: AppState.rtl ? "استئناف النقل" : "Resume transfers";
+                    quiet: true;
+                    clicked => { AppState.resume_after_update(); }
+                }
+                if AppState.update_available && AppState.update_blocked && !AppState.update_busy : SmallText {
+                    text: AppState.rtl ? "انتظر انتهاء النقل قبل تثبيت التحديث." : "Wait for your transfers to finish before installing.";
+                }
+            }
         }
     }
 }

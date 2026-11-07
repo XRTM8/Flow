@@ -61,6 +61,11 @@ fn draw_frame(window: &MinimalSoftwareWindow, width: u32, height: u32, context: 
 }
 
 fn populate_content(state: &AppState<'_>) {
+    state.set_update_available(true);
+    state.set_update_version("9.8.7".into());
+    state.set_update_status(
+        "يتوفر تحديث مناسب لجهازك — A compatible update is ready to download and verify.".into(),
+    );
     let filename =
         "تقرير المشروع ومرفقات المراجعة النهائية — a-long-file-name-without-a-shortcut.pdf";
     state.set_selected_peer_id("11111111-1111-4111-8111-111111111111".into());
@@ -204,6 +209,12 @@ fn every_page_renders_without_recursive_layout_at_desktop_and_phone_sizes() {
             state.set_notice("".into());
             state.set_notice_error(false);
             state.set_draft_text("".into());
+            state.set_update_available(false);
+            state.set_update_busy(false);
+            state.set_update_error(false);
+            state.set_update_status("".into());
+            state.set_update_blocked(false);
+            state.set_update_waiting_confirmation(false);
             state.set_clipboard_text("".into());
             for page in [
                 Page::Home,
@@ -240,6 +251,24 @@ fn every_page_renders_without_recursive_layout_at_desktop_and_phone_sizes() {
                     &format!("{width}x{height} {language} dark={dark} {page:?}"),
                 );
             }
+            for (checking, failed) in [(true, false), (false, true)] {
+                select_page(&state, Page::Settings);
+                state.set_update_busy(checking);
+                state.set_update_error(failed);
+                state.set_update_blocked(true);
+                state.set_update_status("جارٍ التحقق من التحديث؛ ستظل النسخة الحالية متاحة عند فشل التحقق — Download verification status and actionable retry instructions.".into());
+                draw_frame(&window, width, height, &format!("{width}x{height} {language} dark={dark} update checking={checking} failed={failed}"));
+            }
+            state.set_update_busy(false);
+            state.set_update_error(false);
+            state.set_update_waiting_confirmation(true);
+            state.set_update_status("أغلق مثبت النظام ثم اضغط استئناف النقل إن ألغيت التحديث — Close the system installer before resuming transfers.".into());
+            draw_frame(
+                &window,
+                width,
+                height,
+                &format!("{width}x{height} {language} dark={dark} installer confirmation"),
+            );
         }
     }
     ui.hide().expect("Hide the headless window");

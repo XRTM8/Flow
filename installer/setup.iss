@@ -1,5 +1,5 @@
 #define MyAppName "FLOW by Otium"
-#define MyAppVersion "2.4.2"
+#define MyAppVersion "2.4.3"
 #define MyAppPublisher "Otium"
 #define MyAppURL "https://github.com/XRTM8/Flow"
 #define MyAppExeName "OtiumFlow.exe"
@@ -14,7 +14,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\Otium\Flow
 DisableProgramGroupPage=yes
-OutputBaseFilename=OtiumFlow-v2.4.2-Setup-x64
+OutputBaseFilename=OtiumFlow-v2.4.3-Setup-x64
 OutputDir=..\dist
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -42,4 +42,41 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: IsFlowUpdate
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent; Check: not IsFlowUpdate
+
+[UninstallDelete]
+Type: files; Name: "{app}\.flow-installed"
+
+[Code]
+function IsFlowUpdate: Boolean;
+var
+  I: Integer;
+  CloseRequested, RestartRequested: Boolean;
+begin
+  Result := False;
+  CloseRequested := False;
+  RestartRequested := False;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/FLOWUPDATE=1') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if CompareText(ParamStr(I), '/CLOSEAPPLICATIONS') = 0 then
+      CloseRequested := True;
+    if CompareText(ParamStr(I), '/RESTARTAPPLICATIONS') = 0 then
+      RestartRequested := True;
+  end;
+  { Compatibility with the updater shipped before /FLOWUPDATE was available. }
+  Result := WizardSilent and CloseRequested and RestartRequested;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    if not SaveStringToFile(ExpandConstant('{app}\.flow-installed'),
+      'OtiumFlow.Installed|{8B5C061E-74A2-4BC2-9B7E-772A1461A9F4}}', False) then
+      Log('The installation marker could not be saved; registry identity remains available.');
+end;

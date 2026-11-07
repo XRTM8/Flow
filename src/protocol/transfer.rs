@@ -25,6 +25,73 @@ const MAX_TEXT_SIZE: usize = 1024 * 1024;
 const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
 
+#[derive(Debug, Default)]
+struct GateState {
+    paused: bool,
+    active: usize,
+}
+
+/// Owns an update pause without holding a mutex across installation or I/O.
+/// Dropping it reopens the transfer gate on failure or Android installer handoff.
+#[derive(Debug)]
+pub struct UpdatePause {
+    gate: Arc<Mutex<GateState>>,
+}
+
+impl UpdatePause {
+    fn acquire(gate: &Arc<Mutex<GateState>>) -> io::Result<Self> {
+        let mut state = gate.lock().unwrap_or_else(|e| e.into_inner());
+        if state.paused {
+            return Err(error(
+                io::ErrorKind::AlreadyExists,
+                "An update is already in progress",
+            ));
+        }
+        if state.active != 0 {
+            return Err(error(
+                io::ErrorKind::WouldBlock,
+                "Wait for all transfers to finish before installing",
+            ));
+        }
+        state.paused = true;
+        Ok(Self { gate: gate.clone() })
+    }
+}
+
+impl Drop for UpdatePause {
+    fn drop(&mut self) {
+        self.gate.lock().unwrap_or_else(|e| e.into_inner()).paused = false;
+    }
+}
+
+struct TransferLease {
+    gate: Arc<Mutex<GateState>>,
+}
+
+impl TransferLease {
+    fn acquire(gate: &Arc<Mutex<GateState>>) -> io::Result<Self> {
+        let mut state = gate.lock().unwrap_or_else(|e| e.into_inner());
+        if state.paused {
+            return Err(error(
+                io::ErrorKind::WouldBlock,
+                "Flow is updating. Try sending again after the update finishes",
+            ));
+        }
+        state.active = state
+            .active
+            .checked_add(1)
+            .ok_or_else(|| error(io::ErrorKind::WouldBlock, "Too many active transfers"))?;
+        Ok(Self { gate: gate.clone() })
+    }
+}
+
+impl Drop for TransferLease {
+    fn drop(&mut self) {
+        let mut state = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        state.active = state.active.saturating_sub(1);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
     PeerDiscovered(Peer),
@@ -245,6 +312,7 @@ pub struct TransferManager {
     connection_limiter: Arc<Semaphore>,
     incoming: Mutex<HashMap<String, Arc<AtomicBool>>>,
     reserved_bytes: Mutex<u64>,
+    transfer_gate: Arc<Mutex<GateState>>,
 }
 
 impl TransferManager {
@@ -256,7 +324,14 @@ impl TransferManager {
             connection_limiter: Arc::new(Semaphore::new(16)),
             incoming: Mutex::new(HashMap::new()),
             reserved_bytes: Mutex::new(0),
+            transfer_gate: Arc::new(Mutex::new(GateState::default())),
         }
+    }
+
+    /// Atomically prevents new data transfers only when every active one is done.
+    /// Authenticated reachability probes and discovery remain available.
+    pub fn pause_for_update(&self) -> io::Result<UpdatePause> {
+        UpdatePause::acquire(&self.transfer_gate)
     }
 
     pub fn cancel_incoming(&self, id: &str) -> bool {
@@ -354,6 +429,7 @@ impl TransferManager {
         text: String,
         transfer_id: &str,
     ) -> io::Result<()> {
+        let _activity = TransferLease::acquire(&self.transfer_gate)?;
         if text.trim().is_empty() {
             return Err(invalid("Enter text before sending"));
         }
@@ -377,6 +453,7 @@ impl TransferManager {
     where
         F: Fn(u64, u64, f64, u64) + Send,
     {
+        let _activity = TransferLease::acquire(&self.transfer_gate)?;
         tokio::select! {
             result = self.send_file_inner(target, peer_id, path, transfer_id, &cancel, progress) => result,
             _ = wait_cancelled(&cancel) => Err(cancelled_error()),
@@ -512,6 +589,7 @@ impl TransferManager {
         if let Command::Probe = command {
             return channel.command(&Command::Ack).await;
         }
+        let _activity = TransferLease::acquire(&self.transfer_gate)?;
         // UI/cancellation IDs include direction and peer. A remote wire UUID can
         // never replace an outgoing job, or a job from another paired device.
         hello.transfer_id = format!("in:{}:{}", hello.sender_id, hello.transfer_id);
@@ -1001,6 +1079,204 @@ pub fn get_available_disk_space(_path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_pause_is_exclusive_with_concurrent_transfer_leases() {
+        let gate = Arc::new(Mutex::new(GateState::default()));
+        let worker_gate = gate.clone();
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let lease = TransferLease::acquire(&worker_gate).unwrap();
+            acquired_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            drop(lease);
+        });
+        acquired_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            UpdatePause::acquire(&gate).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let pause = UpdatePause::acquire(&gate).unwrap();
+        assert_eq!(
+            UpdatePause::acquire(&gate).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        let contender_gate = gate.clone();
+        let blocked = std::thread::spawn(move || {
+            TransferLease::acquire(&contender_gate)
+                .err()
+                .unwrap()
+                .kind()
+        });
+        assert_eq!(blocked.join().unwrap(), io::ErrorKind::WouldBlock);
+        drop(pause);
+        drop(TransferLease::acquire(&gate).unwrap());
+        assert_eq!(gate.lock().unwrap().active, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn update_pause_blocks_data_in_both_directions_but_allows_probes() {
+        let root = std::env::temp_dir().join(format!("flow-update-gate-{}", uuid::Uuid::new_v4()));
+        let sender_id = uuid::Uuid::new_v4().to_string();
+        let receiver_id = uuid::Uuid::new_v4().to_string();
+        let sender_trust = Arc::new(
+            TrustManager::try_with_self_id(root.join("sender"), sender_id.clone()).unwrap(),
+        );
+        let receiver_trust = Arc::new(
+            TrustManager::try_with_self_id(root.join("receiver"), receiver_id.clone()).unwrap(),
+        );
+        sender_trust
+            .trust_peer_with_secret(
+                receiver_id.clone(),
+                "Receiver".into(),
+                &receiver_trust.pairing_code().await,
+            )
+            .await
+            .unwrap();
+        receiver_trust
+            .trust_peer_with_secret(
+                sender_id.clone(),
+                "Sender".into(),
+                &sender_trust.pairing_code().await,
+            )
+            .await
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = Arc::new(TransferManager::with_trust(
+            address.port(),
+            root.join("files"),
+            receiver_trust,
+        ));
+        let sender = Arc::new(TransferManager::with_trust(
+            0,
+            root.join("outgoing"),
+            sender_trust,
+        ));
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        receiver
+            .clone()
+            .start_with_listener(listener, events_tx)
+            .await;
+
+        let pause = sender.pause_for_update().unwrap();
+        assert_eq!(
+            sender
+                .send_secure_text(
+                    address,
+                    &receiver_id,
+                    "blocked".into(),
+                    &uuid::Uuid::new_v4().to_string()
+                )
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            sender
+                .send_secure_file(
+                    address,
+                    &receiver_id,
+                    &root.join("not-opened.txt"),
+                    &uuid::Uuid::new_v4().to_string(),
+                    Arc::new(AtomicBool::new(false)),
+                    |_, _, _, _| {}
+                )
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        sender.verify_peer(address, &receiver_id).await.unwrap();
+        drop(pause);
+
+        let pause = receiver.pause_for_update().unwrap();
+        sender.verify_peer(address, &receiver_id).await.unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            sender.send_secure_text(
+                address,
+                &receiver_id,
+                "also blocked".into(),
+                &uuid::Uuid::new_v4().to_string()
+            )
+        )
+        .await
+        .unwrap()
+        .is_err());
+        assert!(
+            events_rx.try_recv().is_err(),
+            "paused data must not create a received activity row"
+        );
+        drop(pause);
+
+        sender
+            .send_secure_text(
+                address,
+                &receiver_id,
+                "resumed".into(),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .await
+            .unwrap();
+        let mut delivered = false;
+        while let Ok(event) = events_rx.try_recv() {
+            if let TransferEvent::IncomingComplete {
+                text: Some(text), ..
+            } = event
+            {
+                delivered |= text == "resumed";
+            }
+        }
+        assert!(delivered);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_outgoing_transfer_blocks_update_until_future_is_cancelled() {
+        let root =
+            std::env::temp_dir().join(format!("flow-update-active-{}", uuid::Uuid::new_v4()));
+        let trust = Arc::new(
+            TrustManager::try_with_self_id(root.clone(), uuid::Uuid::new_v4().to_string()).unwrap(),
+        );
+        let peer_id = uuid::Uuid::new_v4().to_string();
+        trust
+            .trust_peer_with_secret(peer_id.clone(), "Peer".into(), &"a".repeat(64))
+            .await
+            .unwrap();
+        let manager = Arc::new(TransferManager::with_trust(0, root.join("files"), trust));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let sending = manager.clone();
+        let task = tokio::spawn(async move {
+            sending
+                .send_secure_text(
+                    address,
+                    &peer_id,
+                    "waiting for peer".into(),
+                    &uuid::Uuid::new_v4().to_string(),
+                )
+                .await
+        });
+        let (_stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            manager.pause_for_update().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        drop(manager.pause_for_update().unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn safe_names_preserve_unicode_and_extensions() {
         assert_eq!(sanitize_filename("../../صورة (1).png"), "صورة (1).png");

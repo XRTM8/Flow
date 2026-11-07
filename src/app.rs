@@ -1,4 +1,5 @@
 //! Shared native presentation controller. Discovery never changes the chosen recipient.
+use crate::protocol::updater::{self, AvailableUpdate, UpdateOutcome};
 use crate::{
     clipboard::ClipboardManager,
     platform,
@@ -60,6 +61,11 @@ enum Command {
     Forget(String),
     OpenDownloads,
     OpenUpdate,
+    CheckUpdates,
+    ApplyUpdate,
+    UpdateChecked(Result<Option<AvailableUpdate>, String>),
+    UpdateApplied(Result<UpdateOutcome, String>),
+    ResumeAfterUpdate,
     Dismiss,
     Refresh,
     Browse(PathBuf),
@@ -100,6 +106,13 @@ struct Engine {
     last_probe: Option<std::time::Instant>,
     manual_peer: Option<Peer>,
     slots: Arc<tokio::sync::Semaphore>,
+    update: Option<AvailableUpdate>,
+    update_busy: bool,
+    installing_update: bool,
+    update_status: String,
+    update_error: bool,
+    update_pause: Option<crate::protocol::transfer::UpdatePause>,
+    installer_open: bool,
 }
 
 pub fn run(mobile: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -272,8 +285,8 @@ pub fn run(mobile: bool) -> Result<(), Box<dyn std::error::Error>> {
         peers: Vec::new(),
         jobs: Vec::new(),
         received: String::new(),
-        notice: String::new(),
-        notice_error: false,
+        notice: argument("--flow-update-error").unwrap_or_default(),
+        notice_error: argument("--flow-update-error").is_some(),
         browser_path: root,
         browser_files: Vec::new(),
         selected_files: HashSet::new(),
@@ -285,8 +298,17 @@ pub fn run(mobile: bool) -> Result<(), Box<dyn std::error::Error>> {
         last_probe: None,
         manual_peer,
         slots: Arc::new(tokio::sync::Semaphore::new(4)),
+        update: None,
+        update_busy: false,
+        installing_update: false,
+        update_status: argument("--flow-update-error").unwrap_or_default(),
+        update_error: argument("--flow-update-error").is_some(),
+        update_pause: None,
+        installer_open: false,
     };
     let task = tokio::spawn(engine.run(rx, event_rx));
+    window.show()?;
+    updater::cleanup_old_executables();
     let result = window.run();
     task.abort();
     result?;
@@ -327,6 +349,9 @@ fn bind_callbacks(window: &AppWindow, tx: mpsc::UnboundedSender<Command>) {
     bind0!(on_clear_history, Command::ClearHistory);
     bind0!(on_open_downloads, Command::OpenDownloads);
     bind0!(on_open_update, Command::OpenUpdate);
+    bind0!(on_check_updates, Command::CheckUpdates);
+    bind0!(on_apply_update, Command::ApplyUpdate);
+    bind0!(on_resume_after_update, Command::ResumeAfterUpdate);
     bind0!(on_dismiss_notice, Command::Dismiss);
     bind0!(on_refresh_devices, Command::Refresh);
     bind0!(on_browse_up, Command::Up);
@@ -574,6 +599,20 @@ impl Engine {
             .any(|j| matches!(j.status.as_str(), "sending" | "queued"));
         let connection_busy = self.probing;
         let connection_failed = self.probe_error.is_some() && current.is_some() && !ready;
+        let update_busy = self.update_busy;
+        let installer_open = self.installer_open;
+        let installing_update = self.installing_update;
+        let update_status = self.update_status.clone();
+        let update_error = self.update_error;
+        let update_version = self
+            .update
+            .as_ref()
+            .map(|update| update.version.clone())
+            .unwrap_or_default();
+        let update_blocked = self
+            .jobs
+            .iter()
+            .any(|j| matches!(j.status.as_str(), "sending" | "receiving" | "queued"));
         self.ui(move |s| {
             let peer_rows = peers
                 .into_iter()
@@ -596,7 +635,14 @@ impl Engine {
             s.set_is_connected(ready);
             s.set_connection_busy(connection_busy);
             s.set_connection_failed(connection_failed);
-            s.set_busy(busy);
+            s.set_busy(busy || installing_update);
+            s.set_update_busy(update_busy);
+            s.set_update_waiting_confirmation(installer_open);
+            s.set_update_status(update_status.into());
+            s.set_update_error(update_error);
+            s.set_update_available(!update_version.is_empty());
+            s.set_update_version(update_version.into());
+            s.set_update_blocked(update_blocked);
             let trusted_rows = trusted
                 .into_iter()
                 .map(|p| PeerItem {
@@ -975,6 +1021,136 @@ impl Engine {
                     self.notice_error = true;
                 }
             }
+            Command::CheckUpdates => {
+                if self.update_busy {
+                    return;
+                }
+                self.update_busy = true;
+                self.update_error = false;
+                self.update_status = tr(
+                    self.ar(),
+                    "Checking the official GitHub release…",
+                    "جارٍ فحص الإصدار الرسمي على GitHub…",
+                )
+                .into();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(Command::UpdateChecked(
+                        updater::check_latest_release().await,
+                    ));
+                });
+            }
+            Command::UpdateChecked(result) => {
+                self.update_busy = false;
+                match result {
+                    Ok(update) => {
+                        self.update_error = false;
+                        self.update_status = if update.is_some() {
+                            tr(
+                                self.ar(),
+                                "A compatible update is available. Install it when you are ready.",
+                                "يتوفر تحديث مناسب لجهازك. يمكنك تثبيته عندما تكون جاهزًا.",
+                            )
+                        } else {
+                            tr(
+                                self.ar(),
+                                "No newer stable update is available.",
+                                "لا يتوفر تحديث مستقر أحدث.",
+                            )
+                        }
+                        .into();
+                        self.update = update;
+                    }
+                    Err(error) => {
+                        self.update = None;
+                        self.update_error = true;
+                        self.update_status = format!(
+                            "{} {error}",
+                            tr(self.ar(), "Update check failed.", "تعذر فحص التحديثات.")
+                        );
+                    }
+                }
+            }
+            Command::ApplyUpdate => {
+                if self.update_busy || self.installer_open {
+                    return;
+                }
+                if self
+                    .jobs
+                    .iter()
+                    .any(|j| matches!(j.status.as_str(), "sending" | "receiving" | "queued"))
+                {
+                    self.update_status = tr(
+                        self.ar(),
+                        "Wait for all transfers to finish before installing.",
+                        "انتظر انتهاء جميع عمليات النقل قبل التثبيت.",
+                    )
+                    .into();
+                    self.update_error = true;
+                    return;
+                }
+                let Some(update) = self.update.clone() else {
+                    return;
+                };
+                let pause = match self.transfer.pause_for_update() {
+                    Ok(pause) => pause,
+                    Err(_) => {
+                        self.update_error = true;
+                        self.update_status = tr(self.ar(), "A transfer just started. Wait for it to finish, then retry the update.", "بدأت عملية نقل للتو. انتظر اكتمالها ثم أعد محاولة التحديث.").into();
+                        return;
+                    }
+                };
+                self.update_pause = Some(pause);
+                self.update_busy = true;
+                self.installing_update = true;
+                self.update_error = false;
+                self.update_status = tr(self.ar(), "Downloading and verifying the update. Keep Flow open; the system will ask you to confirm installation.", "جارٍ تنزيل التحديث والتحقق منه. أبقِ Flow مفتوحًا؛ سيطلب النظام تأكيد التثبيت.").into();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(Command::UpdateApplied(
+                        updater::apply_update_in_place(&update).await,
+                    ));
+                });
+            }
+            Command::UpdateApplied(result) => {
+                self.update_busy = false;
+                self.installing_update = false;
+                match result {
+                    Ok(UpdateOutcome::Restarting) => {
+                        self.ui(|_| {
+                            let _ = slint::quit_event_loop();
+                        });
+                    }
+                    Ok(UpdateOutcome::InstallerOpened) => {
+                        self.installer_open = true;
+                        self.installing_update = true;
+                        self.update_error = false;
+                        self.update_status = tr(self.ar(), "The system installer is open. Confirm there. If you cancel, close the installer and choose Resume transfers below. Flow has not confirmed installation.", "فُتح مثبت النظام؛ أكّد التحديث هناك. إن ألغيت، أغلق المثبت ثم اضغط «استئناف النقل» أدناه. لم يؤكد Flow اكتمال التثبيت.").into();
+                    }
+                    Err(error) => {
+                        self.update_pause = None;
+                        self.update_error = true;
+                        self.update_status = format!(
+                            "{} {error}",
+                            tr(self.ar(), "Update was not installed.", "لم يُثبّت التحديث.")
+                        );
+                    }
+                }
+            }
+            Command::ResumeAfterUpdate => {
+                if self.installer_open {
+                    self.installer_open = false;
+                    self.installing_update = false;
+                    self.update_pause = None;
+                    self.update_status = tr(
+                        self.ar(),
+                        "Transfers resumed. Flow has not confirmed that the update was installed.",
+                        "استؤنف النقل. لم يؤكد Flow تثبيت التحديث.",
+                    )
+                    .into();
+                    self.update_error = false;
+                }
+            }
             Command::Dismiss => self.notice.clear(),
             Command::Refresh => {
                 self.peers = self.discovery.active_peers().await;
@@ -1157,6 +1333,14 @@ impl Engine {
         });
     }
     async fn start_send(&mut self, peer: Peer, payload: Payload) {
+        if self.installing_update {
+            self.message(
+                "Wait for the update action to finish before sending.",
+                "انتظر انتهاء إجراء التحديث قبل الإرسال.",
+                true,
+            );
+            return;
+        }
         if self
             .jobs
             .iter()

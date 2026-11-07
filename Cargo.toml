@@ -1,6 +1,6 @@
 [package]
 name = "otium-flow"
-version = "2.4.2"
+version = "2.4.3"
 edition = "2021"
 default-run = "otium-flow-app"
 
@@ -21,6 +21,7 @@ uuid = { version = "1", features = ["v4"] }
 chacha20poly1305 = "0.11.0"
 sha2 = "0.11.1"
 socket2 = "0.6.5"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 slint = { version = "~1.18", features = ["unstable-winit-030"] }

@@ -2,8 +2,8 @@
 <!-- Reference manifest. cargo-apk generates its manifest from Cargo.toml metadata. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.otium.flow"
-    android:versionCode="16909314"
-    android:versionName="2.4.2">
+    android:versionCode="16909315"
+    android:versionName="2.4.3">
 
     <uses-sdk
         android:minSdkVersion="26"

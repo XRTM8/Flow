@@ -3,6 +3,10 @@ pub mod clipboard;
 pub mod platform;
 pub mod protocol;
 pub mod settings;
+#[cfg(target_os = "android")]
+mod update_android;
+#[cfg(target_os = "windows")]
+mod update_windows;
 mod ux;
 pub mod window_effects;
 
